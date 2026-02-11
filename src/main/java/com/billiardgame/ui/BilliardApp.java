@@ -57,6 +57,7 @@ public final class BilliardApp extends Application {
     private static final double SPECULAR = 0.6;
     private static final double SPECULAR_SIZE_RATIO = 0.35;
     private static final Vector2 LIGHT_DIR_SCREEN = new Vector2(-0.76, -0.65).normalized();
+    private static final Vector2 CLOTH_NAP_DIR = new Vector2(-0.62, -0.45).normalized();
     private static final Vector3 MARKER_LOCAL_1 = unit(0.6, 0.2, 0.77).mul(PhysicsConfig.BALL_RADIUS_M);
     private static final Vector3 MARKER_LOCAL_2 = unit(-0.3, 0.7, 0.64).mul(PhysicsConfig.BALL_RADIUS_M);
     private static final int CLOTH_NOISE_SIZE = 256;
@@ -111,18 +112,21 @@ public final class BilliardApp extends Application {
     private boolean showSpinMarkers = true;
     private boolean showBallShading = true;
     private boolean showTableLighting = true;
+    private boolean showAdvancedLighting = true;
     private boolean showPocketDebug = false;
     private Vector2 tipOffsetNorm = Vector2.ZERO;
     private int tipPresetIndex = 0;
     private boolean rightDragTip = false;
     private CueStyle cueStyle = CueStyle.CLASSIC;
     private WritableImage clothNoiseTexture;
+    private WritableImage ballSpeckleTexture;
 
     @Override
     public void start(Stage stage) {
         Canvas canvas = new Canvas(WINDOW_WIDTH, WINDOW_HEIGHT);
         GraphicsContext gc = canvas.getGraphicsContext2D();
         clothNoiseTexture = createClothNoiseTexture(CLOTH_NOISE_SIZE, CLOTH_NOISE_SIZE, 1837L);
+        ballSpeckleTexture = createBallSpeckleTexture(128, 128, 7341L);
 
         canvas.setOnMouseMoved(event -> mousePosition = new Vector2(event.getX(), event.getY()));
         canvas.setOnMousePressed(event -> {
@@ -171,6 +175,8 @@ public final class BilliardApp extends Application {
                 showSpinMarkers = !showSpinMarkers;
             } else if (event.getCode() == KeyCode.H) {
                 showTableLighting = !showTableLighting;
+            } else if (event.getCode() == KeyCode.L) {
+                showAdvancedLighting = !showAdvancedLighting;
             } else if (event.getCode() == KeyCode.P) {
                 showPocketDebug = !showPocketDebug;
             } else if (event.getCode() == KeyCode.C) {
@@ -417,6 +423,7 @@ public final class BilliardApp extends Application {
         if (showTableLighting) {
             drawClothNoiseTexture(gc, x, y, w, h);
             drawClothLighting(gc, x, y, w, h);
+            drawRailAmbientOcclusion(gc, x, y, w, h);
         }
         drawFeltMicroTexture(gc, x, y, w, h, t);
         drawRailNormalShading(gc, x, y, w, h);
@@ -457,6 +464,9 @@ public final class BilliardApp extends Application {
                     new Stop(1.0, Color.TRANSPARENT)
             ));
             gc.fillOval(pocket.x() - POCKET_RADIUS * 0.85, pocket.y() - POCKET_RADIUS * 0.85, POCKET_RADIUS * 1.7, POCKET_RADIUS * 1.7);
+            gc.setStroke(Color.color(0, 0, 0, 0.35));
+            gc.setLineWidth(2.2);
+            gc.strokeOval(pocket.x() - POCKET_RADIUS * 1.08, pocket.y() - POCKET_RADIUS * 1.08, POCKET_RADIUS * 2.16, POCKET_RADIUS * 2.16);
 
             gc.setStroke(Color.color(1.0, 0.82, 0.58, 0.25));
             gc.setLineWidth(1.2);
@@ -469,8 +479,15 @@ public final class BilliardApp extends Application {
             return;
         }
         gc.save();
-        gc.setGlobalAlpha(0.11);
+        gc.setGlobalAlpha(0.08);
         gc.setFill(new ImagePattern(clothNoiseTexture, x, y, clothNoiseTexture.getWidth(), clothNoiseTexture.getHeight(), false));
+        gc.fillRoundRect(x, y, w, h, 18, 18);
+
+        // Slight anisotropic streaking along cloth nap direction.
+        double napDx = CLOTH_NAP_DIR.x() * 7.0;
+        double napDy = CLOTH_NAP_DIR.y() * 7.0;
+        gc.setGlobalAlpha(0.05);
+        gc.setFill(new ImagePattern(clothNoiseTexture, x + napDx, y + napDy, clothNoiseTexture.getWidth() * 1.18, clothNoiseTexture.getHeight() * 0.86, false));
         gc.fillRoundRect(x, y, w, h, 18, 18);
         gc.restore();
     }
@@ -478,10 +495,19 @@ public final class BilliardApp extends Application {
     private void drawClothLighting(GraphicsContext gc, double x, double y, double w, double h) {
         double lightX = x + (w * 0.23);
         double lightY = y + (h * 0.18);
+        double napFactor = ((LIGHT_DIR_SCREEN.x() * CLOTH_NAP_DIR.x()) + (LIGHT_DIR_SCREEN.y() * CLOTH_NAP_DIR.y()));
+        double napBoost = 0.03 + (0.02 * clamp01((napFactor + 1.0) * 0.5));
         gc.setFill(new RadialGradient(
                 0, 0, lightX, lightY, w * 0.72, false, CycleMethod.NO_CYCLE,
-                new Stop(0.0, Color.color(1.0, 1.0, 1.0, 0.10)),
+                new Stop(0.0, Color.color(1.0, 1.0, 1.0, 0.09 + napBoost)),
                 new Stop(1.0, Color.TRANSPARENT)
+        ));
+        gc.fillRoundRect(x, y, w, h, 18, 18);
+
+        gc.setFill(new LinearGradient(
+                x + (w * 0.20), y + (h * 0.10), x + (w * 0.80), y + (h * 0.85), false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.color(1.0, 1.0, 1.0, 0.02 + napBoost * 0.6)),
+                new Stop(1.0, Color.color(0.0, 0.0, 0.0, 0.03))
         ));
         gc.fillRoundRect(x, y, w, h, 18, 18);
 
@@ -493,13 +519,49 @@ public final class BilliardApp extends Application {
         gc.fillRoundRect(x, y, w, h, 18, 18);
     }
 
+    private void drawRailAmbientOcclusion(GraphicsContext gc, double x, double y, double w, double h) {
+        double aoDepth = BALL_RADIUS_PX * 1.5;
+        gc.setFill(new LinearGradient(
+                0, y, 0, y + aoDepth, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.color(0, 0, 0, 0.16)),
+                new Stop(1.0, Color.TRANSPARENT)
+        ));
+        gc.fillRoundRect(x, y, w, aoDepth, 14, 14);
+        gc.setFill(new LinearGradient(
+                0, y + h - aoDepth, 0, y + h, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.TRANSPARENT),
+                new Stop(1.0, Color.color(0, 0, 0, 0.16))
+        ));
+        gc.fillRoundRect(x, y + h - aoDepth, w, aoDepth, 14, 14);
+        gc.setFill(new LinearGradient(
+                x, 0, x + aoDepth, 0, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.color(0, 0, 0, 0.14)),
+                new Stop(1.0, Color.TRANSPARENT)
+        ));
+        gc.fillRoundRect(x, y, aoDepth, h, 14, 14);
+        gc.setFill(new LinearGradient(
+                x + w - aoDepth, 0, x + w, 0, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.TRANSPARENT),
+                new Stop(1.0, Color.color(0, 0, 0, 0.14))
+        ));
+        gc.fillRoundRect(x + w - aoDepth, y, aoDepth, h, 14, 14);
+
+        for (Vector2 pocket : state.pockets()) {
+            gc.setStroke(Color.color(0, 0, 0, 0.25));
+            gc.setLineWidth(3.0);
+            gc.strokeOval(pocket.x() - POCKET_RADIUS * 1.22, pocket.y() - POCKET_RADIUS * 1.22, POCKET_RADIUS * 2.44, POCKET_RADIUS * 2.44);
+        }
+    }
+
     private void drawFeltMicroTexture(GraphicsContext gc, double x, double y, double w, double h, double t) {
         gc.setStroke(Color.color(0.04, 0.14, 0.09, 0.08));
         gc.setLineWidth(1.0);
         for (int i = 0; i < 165; i++) {
             double yPos = y + ((i * 2.6 + (t * 3.0)) % h);
             double wobble = Math.sin(i * 0.71 + t * 0.42) * 4.0;
-            gc.strokeLine(x + 6 + wobble, yPos, x + w - 6 + wobble * 0.25, yPos + 1.2);
+            double napShiftX = CLOTH_NAP_DIR.x() * 7.5;
+            double napShiftY = CLOTH_NAP_DIR.y() * 7.5;
+            gc.strokeLine(x + 6 + wobble + napShiftX, yPos + napShiftY, x + w - 6 + wobble * 0.25 - napShiftX, yPos + 1.2 - napShiftY);
         }
 
         gc.setStroke(Color.color(0.70, 1.0, 0.84, 0.03));
@@ -931,21 +993,22 @@ public final class BilliardApp extends Application {
         if (showBallShading) {
             double shadowOffsetX = -lightX * r * 0.30;
             double shadowOffsetY = -lightY * r * 0.30;
-            double shadowScale = 1.0 + (speedScale * 0.10);
-            double shadowAlpha = (0.27 + (speedScale * 0.09)) * (0.48 + (railOcclusion * 0.52));
+            double shadowScale = 1.0 + (speedScale * 0.12);
+            double occlusionBoost = 1.0 + ((1.0 - railOcclusion) * 0.30);
+            double shadowAlpha = (0.24 + (speedScale * 0.08)) * occlusionBoost;
             gc.setFill(new RadialGradient(
-                    0, 0,
-                    x + shadowOffsetX, y + shadowOffsetY + r * 0.74,
-                    r * (1.62 * shadowScale),
-                    false, CycleMethod.NO_CYCLE,
+                0, 0,
+                x + shadowOffsetX, y + shadowOffsetY + r * 0.74,
+                r * (1.62 * shadowScale),
+                false, CycleMethod.NO_CYCLE,
                     new Stop(0.0, Color.color(0, 0, 0, shadowAlpha)),
-                    new Stop(1.0, Color.TRANSPARENT)
+                new Stop(1.0, Color.TRANSPARENT)
             ));
             gc.fillOval(
-                    x - (r * 1.56 * shadowScale),
+                    x - (r * 1.64 * shadowScale),
                     y + (r * 0.10),
-                    r * (3.12 * shadowScale),
-                    r * (1.33 * shadowScale)
+                    r * (3.28 * shadowScale),
+                    r * (1.24 * shadowScale)
             );
 
             gc.setFill(new RadialGradient(
@@ -959,6 +1022,23 @@ public final class BilliardApp extends Application {
                     new Stop(1.0, edgeColor.interpolate(Color.BLACK, 1.0 - AMBIENT))
             ));
             gc.fillOval(x - r, y - r, r * 2, r * 2);
+
+            if (showAdvancedLighting && ballSpeckleTexture != null) {
+                gc.save();
+                gc.setGlobalAlpha(index == 0 ? 0.05 : 0.04);
+                gc.setFill(new ImagePattern(ballSpeckleTexture, x - r, y - r, r * 1.35, r * 1.35, false));
+                gc.fillOval(x - r, y - r, r * 2, r * 2);
+                gc.restore();
+            }
+
+            if (showAdvancedLighting) {
+                gc.setFill(new RadialGradient(
+                        0, 0, x, y, r * 1.08, false, CycleMethod.NO_CYCLE,
+                        new Stop(0.78, Color.TRANSPARENT),
+                        new Stop(1.0, Color.color(0, 0, 0, 0.13))
+                ));
+                gc.fillOval(x - r, y - r, r * 2, r * 2);
+            }
 
             gc.setFill(new RadialGradient(
                     0, 0,
@@ -991,13 +1071,22 @@ public final class BilliardApp extends Application {
         gc.strokeOval(x - r, y - r, r * 2, r * 2);
 
         if (showBallShading) {
-            double specX = x + lightX * r * 0.45;
-            double specY = y + lightY * r * 0.45;
-            double specR = r * SPECULAR_SIZE_RATIO;
+            double lvx = -LIGHT_DIR_SCREEN.x();
+            double lvy = -LIGHT_DIR_SCREEN.y();
+            double norm = Math.sqrt((lvx * lvx) + (lvy * lvy));
+            if (norm > 1e-9) {
+                lvx /= norm;
+                lvy /= norm;
+            }
+            double specX = x + lvx * r * 0.50;
+            double specY = y + lvy * r * 0.50;
+            double specR = r * (showAdvancedLighting ? 0.29 : SPECULAR_SIZE_RATIO);
+            double specCore = showAdvancedLighting ? 0.95 : 0.98;
+            double specMid = showAdvancedLighting ? 0.38 : 0.52;
             gc.setFill(new RadialGradient(
                     0, 0, specX, specY, specR, false, CycleMethod.NO_CYCLE,
-                    new Stop(0.0, Color.color(1, 1, 1, 0.98 * SPECULAR)),
-                    new Stop(0.45, Color.color(1, 1, 1, 0.52 * SPECULAR)),
+                    new Stop(0.0, Color.color(1, 1, 1, specCore * SPECULAR)),
+                    new Stop(0.33, Color.color(1, 1, 1, specMid * SPECULAR)),
                     new Stop(1.0, Color.TRANSPARENT)
             ));
             gc.fillOval(specX - specR, specY - specR, specR * 2, specR * 2);
@@ -1163,6 +1252,20 @@ public final class BilliardApp extends Application {
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 double n = 0.88 + ((random.nextDouble() - 0.5) * 0.20);
+                double g = Math.max(0.0, Math.min(1.0, n));
+                writer.setColor(x, y, Color.color(g, g, g, 1.0));
+            }
+        }
+        return img;
+    }
+
+    private static WritableImage createBallSpeckleTexture(int width, int height, long seed) {
+        WritableImage img = new WritableImage(width, height);
+        PixelWriter writer = img.getPixelWriter();
+        Random random = new Random(seed);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                double n = 0.55 + ((random.nextDouble() - 0.5) * 0.90);
                 double g = Math.max(0.0, Math.min(1.0, n));
                 writer.setColor(x, y, Color.color(g, g, g, 1.0));
             }

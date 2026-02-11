@@ -1,31 +1,45 @@
-Upgrade 2.5D visuals for realism (Canvas only), keeping physics unchanged.
-Requirements:
-Table rendering
+Upgrade 2.5D rendering toward broadcast realism. No physics changes.
 
-Add a subtle cloth texture: procedurally generate a small noise image (e.g., 256x256) once at startup and tile it over the cloth area with low opacity.
+A) Cloth nap direction
 
-Add cloth lighting gradient: slightly brighter near the light direction, darker near pockets/rails.
+Add directional shading to cloth:
 
-Make pockets visually deep: dark radial gradient inside each pocket.
+Define cloth nap direction (e.g., slightly toward top-left).
 
-Ball rendering improvements
+Modulate cloth brightness by dot(lightDir, napDir).
 
-Keep existing shaded sphere + specular highlight.
+Very subtle (~3–5% variation).
 
-Improve contact shadow:
+Add slight anisotropic streaking in noise (stretch noise texture slightly along nap direction).
 
-soft elliptical shadow under ball
+B) Contact shadow realism
 
-offset opposite light direction
+Replace perfect radial shadow with:
 
-shadow size increases slightly with speed (tiny effect) and decreases when ball is near a rail (occlusion cue)
+Slightly elliptical shape aligned opposite light direction.
 
-Add a small “brand dot” decal on the cue ball (and optional tiny dot on object balls) that rotates using the physics quaternion markers logic (so spin is visible but subtle and realistic).
+Blur radius increases slightly with ball speed.
 
-Debug toggles
+Shadow intensity increases when ball is near a rail (simulate occlusion).
 
-H toggles table texture/lighting
+C) Ambient occlusion at rails
 
-V toggles decals
+Darken cloth slightly within ~1.5 ball radii of rails.
 
-Keep performance good (cache generated textures). Ensure mvn test passes.
+Add darker ring around pocket mouths.
+
+D) Ball surface imperfection
+
+Add very subtle procedural speckle noise overlay to balls (low opacity).
+
+Slight rim darkening (Fresnel-like effect): darken edges of sphere by ~5%.
+
+E) Highlight improvement
+
+Specular highlight should depend on light direction and ball normal.
+
+Reduce highlight size slightly and increase contrast.
+
+Add debug key L to toggle advanced lighting effects.
+
+Keep performance good. Cache textures. No JavaFX 3D.
