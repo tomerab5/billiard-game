@@ -43,6 +43,11 @@ public final class BilliardApp extends Application {
     private static final double PREDICTION_MAX_DISTANCE = 1400.0;
     private static final double POST_COLLISION_PREVIEW_DISTANCE = 260.0;
     private static final double TIP_OFFSET_MAX = 0.60;
+    private static final double CUE_IDLE_GAP = 6.0;
+    private static final double CUE_MAX_PULLBACK = 84.0;
+    private static final double CUE_DRAW_LENGTH = 238.0;
+    private static final double CUE_FORWARD_SPEED_MIN = 250.0;
+    private static final double CUE_FORWARD_SPEED_MAX = 900.0;
     private static final double AMBIENT = 0.25;
     private static final double DIFFUSE = 0.75;
     private static final double SPECULAR = 0.6;
@@ -60,6 +65,12 @@ public final class BilliardApp extends Application {
         NONE,
         RAIL,
         BALL
+    }
+
+    private enum CueStyle {
+        CLASSIC,
+        LUXURY,
+        SPORT
     }
 
     private final TableState state = new TableState(
@@ -85,6 +96,12 @@ public final class BilliardApp extends Application {
     private boolean chargingShot = false;
     private long shotChargeStartNanos = 0L;
     private double lastChargeSeconds = 0.0;
+    private boolean cueForwardAnimating = false;
+    private double cueForwardBackOffsetPx = 0.0;
+    private double cueForwardSpeedPxPerSec = CUE_FORWARD_SPEED_MIN;
+    private Vector2 pendingShotDirection = Vector2.ZERO;
+    private double pendingShotSpeedPxPerSec = 0.0;
+    private Vector2 pendingShotTipOffset = Vector2.ZERO;
     private boolean showSpinDebug = false;
     private boolean showSpinMarkers = true;
     private boolean showBallShading = true;
@@ -92,6 +109,7 @@ public final class BilliardApp extends Application {
     private Vector2 tipOffsetNorm = Vector2.ZERO;
     private int tipPresetIndex = 0;
     private boolean rightDragTip = false;
+    private CueStyle cueStyle = CueStyle.CLASSIC;
 
     @Override
     public void start(Stage stage) {
@@ -101,7 +119,7 @@ public final class BilliardApp extends Application {
         canvas.setOnMouseMoved(event -> mousePosition = new Vector2(event.getX(), event.getY()));
         canvas.setOnMousePressed(event -> {
             mousePosition = new Vector2(event.getX(), event.getY());
-            if (event.getButton() == MouseButton.PRIMARY && world.allBallsNearlyStopped()) {
+            if (event.getButton() == MouseButton.PRIMARY && world.allBallsNearlyStopped() && !cueForwardAnimating) {
                 chargingShot = true;
                 shotChargeStartNanos = System.nanoTime();
                 lastChargeSeconds = 0.0;
@@ -152,6 +170,12 @@ public final class BilliardApp extends Application {
                 tipPresetIndex = 0;
             } else if (event.getCode() == KeyCode.X) {
                 cycleTipPreset();
+            } else if (event.getCode() == KeyCode.DIGIT8 || event.getCode() == KeyCode.NUMPAD8) {
+                cueStyle = CueStyle.CLASSIC;
+            } else if (event.getCode() == KeyCode.DIGIT9 || event.getCode() == KeyCode.NUMPAD9) {
+                cueStyle = CueStyle.LUXURY;
+            } else if (event.getCode() == KeyCode.DIGIT0 || event.getCode() == KeyCode.NUMPAD0) {
+                cueStyle = CueStyle.SPORT;
             }
         });
 
@@ -213,6 +237,17 @@ public final class BilliardApp extends Application {
             long elapsedNanos = Math.max(0L, System.nanoTime() - shotChargeStartNanos);
             lastChargeSeconds = elapsedNanos / 1_000_000_000.0;
         }
+        if (cueForwardAnimating) {
+            cueForwardBackOffsetPx = Math.max(0.0, cueForwardBackOffsetPx - (cueForwardSpeedPxPerSec * dtSeconds));
+            if (cueForwardBackOffsetPx <= 1e-6) {
+                world.strikeCueBall(pendingShotDirection, pendingShotSpeedPxPerSec, pendingShotTipOffset);
+                cueForwardAnimating = false;
+                pendingShotDirection = Vector2.ZERO;
+                pendingShotSpeedPxPerSec = 0.0;
+                pendingShotTipOffset = Vector2.ZERO;
+                lastChargeSeconds = 0.0;
+            }
+        }
         simulatorState = world.cueBallSpeed() > 0 ? SimulatorState.MOVING : SimulatorState.AIMING;
     }
 
@@ -235,7 +270,7 @@ public final class BilliardApp extends Application {
     }
 
     private void releaseShot() {
-        if (!chargingShot) {
+        if (!chargingShot || cueForwardAnimating) {
             return;
         }
         chargingShot = false;
@@ -251,14 +286,24 @@ public final class BilliardApp extends Application {
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         double speed = chargeRatio * PhysicsConstants.MAX_SHOT_SPEED;
         Vector2 direction = toCursor.mul(1.0 / len);
-        world.strikeCueBall(direction, speed, tipOffsetNorm);
-        lastChargeSeconds = 0.0;
+        pendingShotDirection = direction;
+        pendingShotSpeedPxPerSec = speed;
+        pendingShotTipOffset = tipOffsetNorm;
+        cueForwardBackOffsetPx = chargeRatio * CUE_MAX_PULLBACK;
+        cueForwardSpeedPxPerSec = CUE_FORWARD_SPEED_MIN + (CUE_FORWARD_SPEED_MAX - CUE_FORWARD_SPEED_MIN) * chargeRatio;
+        cueForwardAnimating = true;
     }
 
     private void resetWorld() {
         world = createInitialWorld();
         simulatorState = SimulatorState.AIMING;
         chargingShot = false;
+        cueForwardAnimating = false;
+        cueForwardBackOffsetPx = 0.0;
+        cueForwardSpeedPxPerSec = CUE_FORWARD_SPEED_MIN;
+        pendingShotDirection = Vector2.ZERO;
+        pendingShotSpeedPxPerSec = 0.0;
+        pendingShotTipOffset = Vector2.ZERO;
         lastChargeSeconds = 0.0;
         tipOffsetNorm = Vector2.ZERO;
         tipPresetIndex = 0;
@@ -492,27 +537,117 @@ public final class BilliardApp extends Application {
             }
         }
 
-        if (chargingShot) {
-            Vector2 pull = cueBall.position().sub(mousePosition);
-            Vector2 dir = pull.normalized();
-            double stickLength = 120 + chargeRatio * 60;
-            double startGap = cueBall.radius() + 8 + chargeRatio * 12;
-
-            double sx = cueBall.position().x() + dir.x() * startGap;
-            double sy = cueBall.position().y() + dir.y() * startGap;
-            double ex = sx + dir.x() * stickLength;
-            double ey = sy + dir.y() * stickLength;
-
-            gc.setStroke(new LinearGradient(
-                    sx, sy, ex, ey, false, CycleMethod.NO_CYCLE,
-                    new Stop(0.0, Color.color(0.90, 0.82, 0.62, 0.9)),
-                    new Stop(1.0, Color.color(0.55, 0.38, 0.21, 0.95))
-            ));
-            gc.setLineWidth(5.0);
-            gc.strokeLine(sx, sy, ex, ey);
-        }
+        drawCueGraphic(gc, cueBall, direction, chargeRatio);
 
         drawTipMarker(gc, cueBall);
+    }
+
+    private void drawCueGraphic(GraphicsContext gc, Ball cueBall, Vector2 shotDirection, double chargeRatio) {
+        Vector2 cueAxis = shotDirection.mul(-1.0).normalized();
+        Vector2 normal = new Vector2(-cueAxis.y(), cueAxis.x());
+        double backOffset = cueForwardAnimating
+                ? cueForwardBackOffsetPx
+                : (chargingShot ? chargeRatio * CUE_MAX_PULLBACK : 0.0);
+        double stickLength = CUE_DRAW_LENGTH;
+        double startGap = cueBall.radius() + CUE_IDLE_GAP + backOffset;
+
+        double sx = cueBall.position().x() + cueAxis.x() * startGap;
+        double sy = cueBall.position().y() + cueAxis.y() * startGap;
+        double ex = sx + cueAxis.x() * stickLength;
+        double ey = sy + cueAxis.y() * stickLength;
+
+        gc.setStroke(Color.color(0, 0, 0, 0.30));
+        gc.setLineWidth(8.8);
+        gc.strokeLine(sx + normal.x() * 1.3, sy + normal.y() * 1.3, ex + normal.x() * 1.3, ey + normal.y() * 1.3);
+
+        switch (cueStyle) {
+            case CLASSIC -> drawCueClassicStyle(gc, sx, sy, ex, ey, normal, cueAxis, stickLength);
+            case LUXURY -> drawCueLuxuryStyle(gc, sx, sy, ex, ey, normal, cueAxis, stickLength);
+            case SPORT -> drawCueSportStyle(gc, sx, sy, ex, ey, normal, cueAxis, stickLength);
+        }
+    }
+
+    private void drawCueClassicStyle(GraphicsContext gc, double sx, double sy, double ex, double ey, Vector2 normal, Vector2 cueAxis, double length) {
+        gc.setStroke(new LinearGradient(
+                sx, sy, ex, ey, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.web("#2f6e8c")),
+                new Stop(0.03, Color.web("#f5eedc")),
+                new Stop(0.22, Color.web("#d4a565")),
+                new Stop(0.72, Color.web("#7d4b2d")),
+                new Stop(1.0, Color.web("#1a1111"))
+        ));
+        gc.setLineWidth(6.6);
+        gc.strokeLine(sx, sy, ex, ey);
+
+        gc.setStroke(Color.color(1, 1, 1, 0.26));
+        gc.setLineWidth(1.9);
+        gc.strokeLine(
+                sx + cueAxis.x() * (length * 0.18) + normal.x() * 0.95,
+                sy + cueAxis.y() * (length * 0.18) + normal.y() * 0.95,
+                sx + cueAxis.x() * (length * 0.78) + normal.x() * 0.95,
+                sy + cueAxis.y() * (length * 0.78) + normal.y() * 0.95
+        );
+    }
+
+    private void drawCueLuxuryStyle(GraphicsContext gc, double sx, double sy, double ex, double ey, Vector2 normal, Vector2 cueAxis, double length) {
+        gc.setStroke(new LinearGradient(
+                sx, sy, ex, ey, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.web("#2a6b91")),
+                new Stop(0.04, Color.web("#fbf4e6")),
+                new Stop(0.17, Color.web("#f0cf82")),
+                new Stop(0.48, Color.web("#a26035")),
+                new Stop(0.86, Color.web("#3c1820")),
+                new Stop(1.0, Color.web("#100d16"))
+        ));
+        gc.setLineWidth(6.9);
+        gc.strokeLine(sx, sy, ex, ey);
+
+        gc.setStroke(Color.web("#c6ad66"));
+        gc.setLineWidth(1.2);
+        for (double t = 0.77; t < 0.94; t += 0.052) {
+            double rx = sx + cueAxis.x() * (length * t);
+            double ry = sy + cueAxis.y() * (length * t);
+            gc.strokeLine(rx - normal.x() * 3.1, ry - normal.y() * 3.1, rx + normal.x() * 3.1, ry + normal.y() * 3.1);
+        }
+
+        gc.setStroke(Color.color(1.0, 0.95, 0.78, 0.30));
+        gc.setLineWidth(2.0);
+        gc.strokeLine(
+                sx + cueAxis.x() * (length * 0.15) + normal.x() * 0.95,
+                sy + cueAxis.y() * (length * 0.15) + normal.y() * 0.95,
+                sx + cueAxis.x() * (length * 0.70) + normal.x() * 0.95,
+                sy + cueAxis.y() * (length * 0.70) + normal.y() * 0.95
+        );
+    }
+
+    private void drawCueSportStyle(GraphicsContext gc, double sx, double sy, double ex, double ey, Vector2 normal, Vector2 cueAxis, double length) {
+        gc.setStroke(new LinearGradient(
+                sx, sy, ex, ey, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.web("#15516f")),
+                new Stop(0.04, Color.web("#d8dfe5")),
+                new Stop(0.35, Color.web("#54606c")),
+                new Stop(0.75, Color.web("#171d26")),
+                new Stop(1.0, Color.web("#090c12"))
+        ));
+        gc.setLineWidth(6.8);
+        gc.strokeLine(sx, sy, ex, ey);
+
+        gc.setStroke(Color.color(0.26, 0.84, 1.0, 0.48));
+        gc.setLineWidth(1.8);
+        gc.strokeLine(
+                sx + cueAxis.x() * (length * 0.12) + normal.x() * 0.85,
+                sy + cueAxis.y() * (length * 0.12) + normal.y() * 0.85,
+                sx + cueAxis.x() * (length * 0.82) + normal.x() * 0.85,
+                sy + cueAxis.y() * (length * 0.82) + normal.y() * 0.85
+        );
+
+        gc.setStroke(Color.color(0.20, 0.78, 1.0, 0.50));
+        gc.setLineWidth(1.1);
+        for (double t = 0.80; t < 0.95; t += 0.03) {
+            double rx = sx + cueAxis.x() * (length * t);
+            double ry = sy + cueAxis.y() * (length * t);
+            gc.strokeLine(rx - normal.x() * 2.9, ry - normal.y() * 2.9, rx + normal.x() * 2.9, ry + normal.y() * 2.9);
+        }
     }
 
     private void drawTipMarker(GraphicsContext gc, Ball cueBall) {

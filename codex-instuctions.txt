@@ -1,26 +1,31 @@
-Implement “2.5D realistic ball shading” on the existing Canvas renderer.
+Upgrade 2.5D visuals for realism (Canvas only), keeping physics unchanged.
 Requirements:
+Table rendering
 
-Create a renderer helper (e.g., BallRenderer) or a drawBall(GraphicsContext gc, BallState b) method.
+Add a subtle cloth texture: procedurally generate a small noise image (e.g., 256x256) once at startup and tile it over the cloth area with low opacity.
 
-Add global light direction L in screen space (e.g., from top-left), and constants:
+Add cloth lighting gradient: slightly brighter near the light direction, darker near pockets/rails.
 
-AMBIENT = 0.25, DIFFUSE = 0.75, SPECULAR = 0.6, SPECULAR_SIZE = 0.35*R (tunable).
+Make pockets visually deep: dark radial gradient inside each pocket.
 
-Render passes per ball:
+Ball rendering improvements
 
-Contact shadow: draw a soft ellipse under the ball using a radial gradient; offset slightly opposite the light direction.
+Keep existing shaded sphere + specular highlight.
 
-Base sphere shading: fill the ball circle using a radial gradient that’s brighter near the light-facing side and darker at rim.
+Improve contact shadow:
 
-Specular highlight: draw a small bright radial gradient spot near the light-facing side (not rotating with spin).
+soft elliptical shadow under ball
 
-Spin decals: use the existing quaternion-rotated marker points; draw them as small colored dots/patches, only when rotated point has z>0; scale alpha by z.
+offset opposite light direction
 
-Add toggle keys:
+shadow size increases slightly with speed (tiny effect) and decreases when ball is near a rail (occlusion cue)
 
-V toggles decals/markers
+Add a small “brand dot” decal on the cue ball (and optional tiny dot on object balls) that rotates using the physics quaternion markers logic (so spin is visible but subtle and realistic).
 
-H toggles highlight+shading (for debugging)
+Debug toggles
 
-Keep physics unchanged; tests should remain unchanged.
+H toggles table texture/lighting
+
+V toggles decals
+
+Keep performance good (cache generated textures). Ensure mvn test passes.
