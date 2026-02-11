@@ -2,12 +2,14 @@ package com.billiardgame.ui;
 
 import com.billiardgame.game.Ball;
 import com.billiardgame.game.TableState;
+import com.billiardgame.physics.PhysicsWorld;
 import com.billiardgame.physics.Vector2;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -27,7 +29,8 @@ public final class BilliardApp extends Application {
     private static final double FIXED_DT_SECONDS = 1.0 / 120.0;
 
     private enum SimulatorState {
-        AIMING
+        AIMING,
+        MOVING
     }
 
     private final TableState state = new TableState(
@@ -46,6 +49,8 @@ public final class BilliardApp extends Application {
             new Ball(new Vector2(TABLE_X + TABLE_WIDTH * 0.33, TABLE_Y + TABLE_HEIGHT * 0.5), 12)
     );
 
+    private final PhysicsWorld world = new PhysicsWorld(List.of(state.cueBall()));
+
     private Vector2 mousePosition = state.cueBall().position();
     private SimulatorState simulatorState = SimulatorState.AIMING;
 
@@ -58,11 +63,19 @@ public final class BilliardApp extends Application {
         canvas.setOnMouseDragged(event -> mousePosition = new Vector2(event.getX(), event.getY()));
 
         Scene scene = new Scene(new StackPane(canvas), WINDOW_WIDTH, WINDOW_HEIGHT, Color.web("#1a1a1a"));
+        scene.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.SPACE) {
+                world.setCueBallVelocity(new Vector2(800, 0));
+            }
+        });
 
         stage.setTitle("2D Billiards Simulator");
         stage.setScene(scene);
         stage.setResizable(false);
         stage.show();
+
+        canvas.setFocusTraversable(true);
+        canvas.requestFocus();
 
         AnimationTimer timer = new AnimationTimer() {
             private long lastFrameNanos = -1;
@@ -109,10 +122,8 @@ public final class BilliardApp extends Application {
     }
 
     private void update(double dtSeconds) {
-        // Fixed-timestep placeholder for simulation updates.
-        if (dtSeconds <= 0) {
-            throw new IllegalArgumentException("dtSeconds must be positive");
-        }
+        world.step(dtSeconds);
+        simulatorState = world.cueBallSpeed() > 0 ? SimulatorState.MOVING : SimulatorState.AIMING;
     }
 
     private void render(GraphicsContext gc, double fps) {
@@ -130,14 +141,16 @@ public final class BilliardApp extends Application {
             gc.fillOval(pocket.x() - POCKET_RADIUS, pocket.y() - POCKET_RADIUS, POCKET_RADIUS * 2, POCKET_RADIUS * 2);
         }
 
-        Ball cueBall = state.cueBall();
+        Ball cueBall = world.cueBall();
 
         gc.setStroke(Color.web("#f5d142"));
         gc.setLineWidth(2.0);
         gc.strokeLine(cueBall.position().x(), cueBall.position().y(), mousePosition.x(), mousePosition.y());
 
         gc.setFill(Color.WHITE);
-        gc.fillOval(cueBall.position().x() - cueBall.radius(), cueBall.position().y() - cueBall.radius(), cueBall.radius() * 2, cueBall.radius() * 2);
+        for (Ball ball : world.balls()) {
+            gc.fillOval(ball.position().x() - ball.radius(), ball.position().y() - ball.radius(), ball.radius() * 2, ball.radius() * 2);
+        }
 
         gc.setFill(Color.color(0.0, 0.0, 0.0, 0.6));
         gc.fillRoundRect(12, 12, 210, 52, 10, 10);

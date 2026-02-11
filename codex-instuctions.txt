@@ -1,7 +1,17 @@
-Update BilliardApp to use a fixed-timestep update loop (accumulator) with dt = 1/120.0 seconds.
-Keep rendering separate from updates.
-Add input handling: track mouse position on the Canvas.
-Render an aim line from the cue ball center to the mouse cursor.
-Add a small debug overlay (FPS + current state string like “AIMING”).
-Avoid JavaFX types in game/physics packages.
-Ensure .\mvnw.cmd test passes. MVP scope (top-down 2D, no spin initially).
+Implement Milestone 2 (movement + friction) with minimal API surface and clean dependencies.
+
+Add Vector2 methods needed: add, sub, mul(scalar), length, lengthSq.
+
+Create physics/PhysicsConstants with LINEAR_DAMPING_PER_SEC (or FRICTION_PER_SEC) and STOP_EPS.
+
+Create physics/PhysicsWorld that owns a List<BallBody> OR uses existing game.Ball but keep JavaFX out.
+
+step(dt) integrates: pos = pos + vel*dt; applies damping: vel = vel * max(0, 1 - damping*dt); if speed < eps -> vel=ZERO.
+
+Update BilliardApp to store a PhysicsWorld and render from it.
+
+Add SPACE key to apply a test impulse (set velocity) to cue ball.
+
+Add PhysicsWorldTest: speed decreases; stops after enough steps.
+
+Keep game state separate from ui and physics.
