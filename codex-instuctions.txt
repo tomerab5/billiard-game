@@ -1,24 +1,34 @@
-Upgrade rail collisions to impulse-based response including tangential friction and spin transfer.
+Implement cue–ball strike with tip offset and spin generation.
 Requirements:
 
-Replace simple “flip vx/vy” rail handling with a contact impulse model:
+Replace “set velocity on release” with a CueStrike model:
 
-Use wall normal n and tangent t (both in table plane).
+On mouse release, compute cue direction in table plane.
 
-Compute contact point relative vector r = -R*k (bottom contact) OR r = -R*n (if you modeled wall contact differently). Choose one consistent approach and document it.
+Add an aiming UI for tip offset:
 
-Compute contact relative velocity vContact = v + w×r.
+While aiming, show a small marker on the cue ball indicating hit point (dx, dy) relative to center in ball-radius units.
 
-Compute normal impulse to satisfy restitution e_rail.
+Use mouse wheel or right-drag to adjust offset, clamp to a safe max (e.g., 0.6R) to avoid impossible hits.
 
-Compute tangential impulse along t to oppose slip, clamped by |Jt| <= mu_rail * Jn.
+Compute an impulse J along cue direction based on charge (existing).
 
-Apply to v and w using the same impulse formulas as ball–ball.
+Convert tip offset into angular impulse:
+
+Apply linear impulse at an offset point on the ball surface so w changes via Δw = I^{-1}(r×J).
+
+Add a simple miscue limit:
+
+Cap tangential component based on mu_tip * Jn (use a configurable MU_TIP).
 
 Add tests:
 
-Ball hits vertical rail: vx reverses sign and magnitude reduced by restitution.
+Top hit -> positive roll (w makes ball “follow”).
 
-With side spin (wz), after rail hit the outgoing vy differs from no-spin case (assert difference).
+Bottom hit -> draw behavior (w opposite direction).
 
-Add debug overlay values: show mu_rail, e_rail.
+Add keys:
+
+C centers tip.
+
+X quick presets: center/top/bottom/left/right.

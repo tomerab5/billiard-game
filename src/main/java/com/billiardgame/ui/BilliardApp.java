@@ -41,6 +41,7 @@ public final class BilliardApp extends Application {
     private static final double FIXED_DT_SECONDS = 1.0 / 120.0;
     private static final double PREDICTION_MAX_DISTANCE = 1400.0;
     private static final double POST_COLLISION_PREVIEW_DISTANCE = 260.0;
+    private static final double TIP_OFFSET_MAX = 0.60;
 
     private enum SimulatorState {
         AIMING,
@@ -77,6 +78,9 @@ public final class BilliardApp extends Application {
     private long shotChargeStartNanos = 0L;
     private double lastChargeSeconds = 0.0;
     private boolean showSpinDebug = false;
+    private Vector2 tipOffsetNorm = Vector2.ZERO;
+    private int tipPresetIndex = 0;
+    private boolean rightDragTip = false;
 
     @Override
     public void start(Stage stage) {
@@ -84,20 +88,36 @@ public final class BilliardApp extends Application {
         GraphicsContext gc = canvas.getGraphicsContext2D();
 
         canvas.setOnMouseMoved(event -> mousePosition = new Vector2(event.getX(), event.getY()));
-        canvas.setOnMouseDragged(event -> mousePosition = new Vector2(event.getX(), event.getY()));
         canvas.setOnMousePressed(event -> {
             mousePosition = new Vector2(event.getX(), event.getY());
             if (event.getButton() == MouseButton.PRIMARY && world.allBallsNearlyStopped()) {
                 chargingShot = true;
                 shotChargeStartNanos = System.nanoTime();
                 lastChargeSeconds = 0.0;
+            } else if (event.getButton() == MouseButton.SECONDARY) {
+                rightDragTip = true;
             }
         });
         canvas.setOnMouseReleased(event -> {
             mousePosition = new Vector2(event.getX(), event.getY());
             if (event.getButton() == MouseButton.PRIMARY) {
                 releaseShot();
+            } else if (event.getButton() == MouseButton.SECONDARY) {
+                rightDragTip = false;
             }
+        });
+        canvas.setOnMouseDragged(event -> {
+            mousePosition = new Vector2(event.getX(), event.getY());
+            if (rightDragTip) {
+                adjustTipOffset(event.getX() - cueBallScreenX(), event.getY() - cueBallScreenY());
+            }
+        });
+        canvas.setOnScroll(event -> {
+            if (!world.allBallsNearlyStopped()) {
+                return;
+            }
+            double delta = event.getDeltaY() > 0 ? 0.04 : -0.04;
+            tipOffsetNorm = clampTipOffset(tipOffsetNorm.add(new Vector2(0, delta)));
         });
 
         Scene scene = new Scene(new StackPane(canvas), WINDOW_WIDTH, WINDOW_HEIGHT, Color.web("#101518"));
@@ -110,6 +130,11 @@ public final class BilliardApp extends Application {
                 world.increaseRollingFriction(0.001);
             } else if (event.getCode() == KeyCode.T) {
                 showSpinDebug = !showSpinDebug;
+            } else if (event.getCode() == KeyCode.C) {
+                tipOffsetNorm = Vector2.ZERO;
+                tipPresetIndex = 0;
+            } else if (event.getCode() == KeyCode.X) {
+                cycleTipPreset();
             }
         });
 
@@ -209,7 +234,7 @@ public final class BilliardApp extends Application {
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         double speed = chargeRatio * PhysicsConstants.MAX_SHOT_SPEED;
         Vector2 direction = toCursor.mul(1.0 / len);
-        world.setCueBallVelocity(direction.mul(speed));
+        world.strikeCueBall(direction, speed, tipOffsetNorm);
         lastChargeSeconds = 0.0;
     }
 
@@ -218,6 +243,8 @@ public final class BilliardApp extends Application {
         simulatorState = SimulatorState.AIMING;
         chargingShot = false;
         lastChargeSeconds = 0.0;
+        tipOffsetNorm = Vector2.ZERO;
+        tipPresetIndex = 0;
     }
 
     private void render(GraphicsContext gc, double fps, double timeSeconds) {
@@ -442,6 +469,23 @@ public final class BilliardApp extends Application {
             gc.setLineWidth(5.0);
             gc.strokeLine(sx, sy, ex, ey);
         }
+
+        drawTipMarker(gc, cueBall);
+    }
+
+    private void drawTipMarker(GraphicsContext gc, Ball cueBall) {
+        if (!world.allBallsNearlyStopped()) {
+            return;
+        }
+        double markerX = cueBall.position().x() + tipOffsetNorm.x() * cueBall.radius();
+        double markerY = cueBall.position().y() - tipOffsetNorm.y() * cueBall.radius();
+        double r = Math.max(3.0, cueBall.radius() * 0.22);
+
+        gc.setFill(Color.color(0.96, 0.96, 0.96, 0.92));
+        gc.fillOval(markerX - r, markerY - r, r * 2, r * 2);
+        gc.setStroke(Color.color(0.12, 0.12, 0.12, 0.75));
+        gc.setLineWidth(1.2);
+        gc.strokeOval(markerX - r, markerY - r, r * 2, r * 2);
     }
 
     private void drawPostCollisionSegment(GraphicsContext gc, Vector2 start, Vector2 end, Color coreColor, Color glowColor) {
@@ -730,21 +774,22 @@ public final class BilliardApp extends Application {
         gc.fillText(String.format("Cue %s  %.1f px/s", cueMode, cueSpeed), 26, 76);
         gc.fillText(String.format("mu_r %.3f   a_roll %.3f m/s^2", muR, rollAccel), 26, 96);
         gc.fillText(String.format("mu_rail %.3f   e_rail %.2f", PhysicsConfig.MU_RAIL, PhysicsConfig.RAIL_RESTITUTION), 26, 116);
+        gc.fillText(String.format("tip (%.2f, %.2f)", tipOffsetNorm.x(), tipOffsetNorm.y()), 26, 136);
 
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         gc.setFill(Color.color(0.01, 0.03, 0.04, 0.78));
-        gc.fillRoundRect(14, 146, 302, 34, 10, 10);
+        gc.fillRoundRect(14, 164, 302, 34, 10, 10);
         gc.setFill(new LinearGradient(
                 20, 0, 300, 0, false, CycleMethod.NO_CYCLE,
                 new Stop(0.0, Color.web("#f1cc58")),
                 new Stop(0.7, Color.web("#ff9444")),
                 new Stop(1.0, Color.web("#ff5e45"))
         ));
-        gc.fillRoundRect(20, 152, 290 * chargeRatio, 22, 8, 8);
+        gc.fillRoundRect(20, 170, 290 * chargeRatio, 22, 8, 8);
 
         gc.setFill(Color.web("#f7f7f7"));
         gc.setFont(Font.font("Georgia", FontWeight.BOLD, 13));
-        gc.fillText(String.format("SHOT POWER %d%%", (int) Math.round(chargeRatio * 100)), 24, 168);
+        gc.fillText(String.format("SHOT POWER %d%%", (int) Math.round(chargeRatio * 100)), 24, 186);
 
         gc.setFill(new RadialGradient(
                 0, 0, WINDOW_WIDTH * 0.5, WINDOW_HEIGHT * 0.48, WINDOW_WIDTH * 0.68,
@@ -757,6 +802,44 @@ public final class BilliardApp extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private void cycleTipPreset() {
+        tipPresetIndex = (tipPresetIndex + 1) % 5;
+        switch (tipPresetIndex) {
+            case 0 -> tipOffsetNorm = Vector2.ZERO;
+            case 1 -> tipOffsetNorm = new Vector2(0, 0.50);
+            case 2 -> tipOffsetNorm = new Vector2(0, -0.50);
+            case 3 -> tipOffsetNorm = new Vector2(-0.50, 0);
+            case 4 -> tipOffsetNorm = new Vector2(0.50, 0);
+            default -> tipOffsetNorm = Vector2.ZERO;
+        }
+    }
+
+    private void adjustTipOffset(double dxPx, double dyPx) {
+        Ball cueBall = world.cueBall();
+        if (cueBall.radius() <= 1e-6) {
+            return;
+        }
+        double nx = dxPx / cueBall.radius();
+        double ny = -dyPx / cueBall.radius();
+        tipOffsetNorm = clampTipOffset(new Vector2(nx, ny));
+    }
+
+    private Vector2 clampTipOffset(Vector2 offset) {
+        double len = offset.length();
+        if (len <= TIP_OFFSET_MAX) {
+            return offset;
+        }
+        return offset.normalized().mul(TIP_OFFSET_MAX);
+    }
+
+    private double cueBallScreenX() {
+        return world.cueBall().position().x();
+    }
+
+    private double cueBallScreenY() {
+        return world.cueBall().position().y();
     }
 
     private static final class Prediction {

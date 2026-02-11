@@ -67,6 +67,22 @@ final class PhysicsWorldTest {
     }
 
     @Test
+    void topHitCreatesPositiveRollComponent() {
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
+        world.strikeCueBall(new Vector2(1, 0), 300.0, new Vector2(0.0, 0.5));
+
+        assertTrue(world.ballAngularVelocity(0).y() > 0.0);
+    }
+
+    @Test
+    void bottomHitCreatesDrawComponent() {
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
+        world.strikeCueBall(new Vector2(1, 0), 300.0, new Vector2(0.0, -0.5));
+
+        assertTrue(world.ballAngularVelocity(0).y() < 0.0);
+    }
+
+    @Test
     void wzDecaysOverTime() {
         PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
         world.setBallAngularVelocity(0, new Vector3(0, 0, 30));

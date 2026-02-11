@@ -102,6 +102,37 @@ public final class PhysicsWorld {
         return toPixels(balls.get(0).velocity).length();
     }
 
+    public void strikeCueBall(Vector2 directionPx, double speedPxPerSec, Vector2 tipOffsetNorm) {
+        if (balls.isEmpty()) {
+            throw new IllegalStateException("No balls in world");
+        }
+        if (directionPx.length() <= 1e-9 || speedPxPerSec <= 0.0) {
+            return;
+        }
+
+        BallBody cue = balls.get(0);
+        Vector2 dir = directionPx.normalized();
+        double speedMps = speedPxPerSec / pixelsPerMeter;
+        Vector3 impulse = toVec3(dir.mul(cue.mass * speedMps));
+
+        Vector2 left = new Vector2(-dir.y(), dir.x());
+        double rawDx = tipOffsetNorm.x();
+        double rawDy = tipOffsetNorm.y();
+        double tangential = Math.sqrt((rawDx * rawDx) + (rawDy * rawDy));
+        double maxTangential = PhysicsConfig.MU_TIP;
+        double scale = tangential > maxTangential && tangential > 1e-9 ? (maxTangential / tangential) : 1.0;
+        double dx = rawDx * scale;
+        double dy = rawDy * scale;
+
+        Vector3 r = new Vector3(
+                left.x() * dx * cue.radius,
+                left.y() * dx * cue.radius,
+                dy * cue.radius
+        );
+
+        applyImpulse(cue, impulse, r);
+    }
+
     public double rollingFriction() {
         return muRolling;
     }
