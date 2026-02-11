@@ -29,11 +29,19 @@ public final class Vector3 {
         return new Vector3(x + other.x, y + other.y, z + other.z);
     }
 
+    public Vector3 sub(Vector3 other) {
+        return new Vector3(x - other.x, y - other.y, z - other.z);
+    }
+
     public Vector3 mul(double scalar) {
         return new Vector3(x * scalar, y * scalar, z * scalar);
     }
 
     public double length() {
-        return Math.sqrt((x * x) + (y * y) + (z * z));
+        return Math.sqrt(lengthSq());
+    }
+
+    public double lengthSq() {
+        return (x * x) + (y * y) + (z * z);
     }
 }

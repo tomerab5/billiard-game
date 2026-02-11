@@ -218,20 +218,71 @@ public final class PhysicsWorld {
                 a.position = a.position.sub(correction);
                 b.position = b.position.add(correction);
 
-                Vector2 relativeVelocity = b.velocity.sub(a.velocity);
-                double velAlongNormal = (relativeVelocity.x() * normal.x()) + (relativeVelocity.y() * normal.y());
-                if (velAlongNormal >= 0.0) {
+                Vector3 n3 = new Vector3(normal.x(), normal.y(), 0.0);
+                Vector3 r1 = n3.mul(a.radius);
+                Vector3 r2 = n3.mul(-b.radius);
+
+                Vector3 v1c = toVec3(a.velocity).add(cross(a.angularVelocity, r1));
+                Vector3 v2c = toVec3(b.velocity).add(cross(b.angularVelocity, r2));
+                Vector3 vRel3 = v2c.sub(v1c);
+                Vector2 vRel = new Vector2(vRel3.x(), vRel3.y());
+
+                double vRelN = dot(vRel, normal);
+                if (vRelN >= 0.0) {
                     continue;
                 }
 
-                double impulseMagnitude = -(1.0 + PhysicsConfig.BALL_BALL_RESTITUTION) * velAlongNormal;
-                impulseMagnitude /= (1.0 / a.mass) + (1.0 / b.mass);
+                double invMassSum = (1.0 / a.mass) + (1.0 / b.mass);
+                double jn = -(1.0 + PhysicsConfig.BALL_BALL_RESTITUTION) * vRelN / invMassSum;
 
-                Vector2 impulse = normal.mul(impulseMagnitude);
-                a.velocity = a.velocity.sub(impulse.mul(1.0 / a.mass));
-                b.velocity = b.velocity.add(impulse.mul(1.0 / b.mass));
+                Vector2 tangentComponent = vRel.sub(normal.mul(vRelN));
+                Vector2 tangent = tangentComponent.normalized();
+                double vt = tangentComponent.length();
+                double jt = 0.0;
+                if (vt > PhysicsConfig.BALL_COLLISION_TANGENTIAL_EPS_M_PER_S) {
+                    double i1 = inertia(a.mass, a.radius);
+                    double i2 = inertia(b.mass, b.radius);
+                    Vector3 t3 = new Vector3(tangent.x(), tangent.y(), 0.0);
+                    double kT = invMassSum
+                            + cross(r1, t3).lengthSq() / i1
+                            + cross(r2, t3).lengthSq() / i2;
+                    double jtUnclamped = -vt / kT;
+                    double jtMax = PhysicsConfig.MU_BALL_BALL * jn;
+                    jt = Math.max(-jtMax, Math.min(jtMax, jtUnclamped));
+                }
+
+                Vector3 impulse = n3.mul(jn).add(new Vector3(tangent.x(), tangent.y(), 0.0).mul(jt));
+                applyImpulse(a, impulse.mul(-1.0), r1);
+                applyImpulse(b, impulse, r2);
             }
         }
+    }
+
+    private void applyImpulse(BallBody body, Vector3 impulse, Vector3 contactOffset) {
+        body.velocity = body.velocity.add(new Vector2(impulse.x(), impulse.y()).mul(1.0 / body.mass));
+        Vector3 torqueImpulse = cross(contactOffset, impulse);
+        double invI = 1.0 / inertia(body.mass, body.radius);
+        body.angularVelocity = body.angularVelocity.add(torqueImpulse.mul(invI));
+    }
+
+    private static double inertia(double mass, double radius) {
+        return (2.0 / 5.0) * mass * radius * radius;
+    }
+
+    private static double dot(Vector2 a, Vector2 b) {
+        return (a.x() * b.x()) + (a.y() * b.y());
+    }
+
+    private static Vector3 toVec3(Vector2 v) {
+        return new Vector3(v.x(), v.y(), 0.0);
+    }
+
+    private static Vector3 cross(Vector3 a, Vector3 b) {
+        return new Vector3(
+                (a.y() * b.z()) - (a.z() * b.y()),
+                (a.z() * b.x()) - (a.x() * b.z()),
+                (a.x() * b.y()) - (a.y() * b.x())
+        );
     }
 
     private void applyClothInteraction(BallBody ballBody, double dtSeconds) {

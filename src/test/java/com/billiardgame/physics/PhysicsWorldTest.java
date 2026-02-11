@@ -95,6 +95,24 @@ final class PhysicsWorldTest {
     }
 
     @Test
+    void sideSpinTransfersOnCollision() {
+        Ball a = new Ball(new Vector2(0, 0), 12);
+        Ball b = new Ball(new Vector2(24, 0), 12);
+        PhysicsWorld world = new PhysicsWorld(List.of(a, b), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
+        world.setBallVelocity(0, new Vector2(220, 0));
+        world.setBallVelocity(1, Vector2.ZERO);
+        world.setBallAngularVelocity(0, new Vector3(0, 0, 35));
+
+        for (int i = 0; i < 6; i++) {
+            world.step(1.0 / 240.0);
+        }
+
+        double targetSideways = Math.abs(world.ballVelocity(1).y());
+        double cueSpinAfter = Math.abs(world.ballAngularVelocity(0).z());
+        assertTrue(targetSideways > 0.01 || cueSpinAfter < 35.0);
+    }
+
+    @Test
     void overlappingStationaryBallsGetSeparatedAfterStep() {
         Ball a = new Ball(new Vector2(0, 0), 12);
         Ball b = new Ball(new Vector2(10, 0), 12);

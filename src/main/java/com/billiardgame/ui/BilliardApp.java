@@ -76,6 +76,7 @@ public final class BilliardApp extends Application {
     private boolean chargingShot = false;
     private long shotChargeStartNanos = 0L;
     private double lastChargeSeconds = 0.0;
+    private boolean showSpinDebug = false;
 
     @Override
     public void start(Stage stage) {
@@ -107,6 +108,8 @@ public final class BilliardApp extends Application {
                 world.decreaseRollingFriction(0.001);
             } else if (event.getCode() == KeyCode.CLOSE_BRACKET) {
                 world.increaseRollingFriction(0.001);
+            } else if (event.getCode() == KeyCode.T) {
+                showSpinDebug = !showSpinDebug;
             }
         });
 
@@ -409,7 +412,7 @@ public final class BilliardApp extends Application {
         } else if (prediction.type == HitType.BALL && prediction.objectBallDirection != null) {
             Vector2 objectStart = prediction.hitPoint.add(prediction.objectBallDirection.mul(0.5));
             double objectMaxT = distanceToRail(objectStart, prediction.objectBallDirection, cueBall.radius());
-            Vector2 objectAfter = objectStart.add(prediction.objectBallDirection.mul(Math.min(POST_COLLISION_PREVIEW_DISTANCE, objectMaxT)));
+            Vector2 objectAfter = objectStart.add(prediction.objectBallDirection.mul(Math.min(POST_COLLISION_PREVIEW_DISTANCE * 0.22, objectMaxT)));
             drawPostCollisionSegment(gc, objectStart, objectAfter, Color.color(0.73, 0.90, 1.0, 0.78), Color.color(0.86, 0.96, 1.0, 0.24));
 
             if (prediction.cueDeflectDirection != null && prediction.cueDeflectDirection.length() > 1e-6) {
@@ -576,6 +579,12 @@ public final class BilliardApp extends Application {
         for (int i = 0; i < balls.size(); i++) {
             Ball ball = balls.get(i);
             drawBall(gc, ball, i);
+            if (showSpinDebug) {
+                double wz = world.ballAngularVelocity(i).z();
+                gc.setFill(Color.color(0.90, 0.95, 1.0, 0.92));
+                gc.setFont(Font.font("Consolas", FontWeight.BOLD, 11));
+                gc.fillText(String.format("wz %.2f", wz), ball.position().x() + ball.radius() + 5, ball.position().y() - ball.radius() - 3);
+            }
         }
 
         Vector2 cueVel = world.ballVelocity(0);

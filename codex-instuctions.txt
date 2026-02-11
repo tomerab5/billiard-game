@@ -1,13 +1,30 @@
-Tune rolling realism:
+Upgrade ball–ball collisions to include spin + friction impulse (Coulomb).
+Requirements:
 
-Ensure rolling phase uses constant decel: a = μ_r * g opposite velocity direction.
+In physics, represent each ball with linear velocity v (2D) and angular velocity w (3D). If w already exists, use it.
 
-Set default μ_r = 0.013 and μ_s typical 0.2 (unchanged).
+For a ball–ball collision, compute contact normal n (in table plane), contact offsets r1 = R*n, r2 = -R*n (3D vectors with z=0).
 
-Raise stop threshold slightly (e.g., stop when speed < 0.03 m/s).
+Compute relative velocity at contact: vRel = (v2 + w2×r2) - (v1 + w1×r1).
 
-Add runtime tuning: [ decreases μ_r by 0.001, ] increases by 0.001 (clamp 0.005..0.024).
+Compute normal impulse Jn using coefficient of restitution e_bb (keep current value).
 
-Display μ_r, a_roll (=μ_r*g), and cue-ball speed in HUD.
+Compute tangential impulse Jt that opposes tangential relative motion, clamped by |Jt| <= mu_bb * Jn.
 
-Tests should remain non-brittle (no exact distances), just “eventually stops” and “rolling decel applied.”
+If tangential relative speed is near zero, skip Jt.
+
+Apply impulses to both balls:
+
+v += ± J/m
+
+w += I^{-1} (r × (±J)) with I = 2/5 m R^2
+
+Keep determinism and keep JavaFX out of physics.
+
+Add/extend tests:
+
+Head-on equal-mass: velocities approximately swap (within tolerance).
+
+With initial side spin on cue ball, after collision: target ball gets some sideways component OR cue ball loses some spin (assert non-zero transfer).
+
+Add a debug mode key T: toggles showing each ball’s wz (or total |w|) as text near the ball.

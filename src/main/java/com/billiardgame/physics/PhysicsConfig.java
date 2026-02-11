@@ -16,6 +16,8 @@ public final class PhysicsConfig {
     public static final double STOP_SPIN_EPS_RAD_PER_S = 0.25;
 
     public static final double BALL_BALL_RESTITUTION = 0.98;
+    public static final double MU_BALL_BALL = 0.06;
+    public static final double BALL_COLLISION_TANGENTIAL_EPS_M_PER_S = 1e-4;
     public static final double RAIL_RESTITUTION = 0.92;
 
     public static final double TABLE_WIDTH_M = 2.54;
