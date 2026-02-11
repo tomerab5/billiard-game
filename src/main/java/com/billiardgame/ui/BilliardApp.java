@@ -2,7 +2,9 @@ package com.billiardgame.ui;
 
 import com.billiardgame.game.Ball;
 import com.billiardgame.game.TableState;
+import com.billiardgame.physics.PhysicsConstants;
 import com.billiardgame.physics.PhysicsWorld;
+import com.billiardgame.physics.TableBounds;
 import com.billiardgame.physics.Vector2;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
@@ -10,6 +12,7 @@ import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.KeyCode;
+import javafx.scene.input.MouseButton;
 import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -49,10 +52,13 @@ public final class BilliardApp extends Application {
             new Ball(new Vector2(TABLE_X + TABLE_WIDTH * 0.33, TABLE_Y + TABLE_HEIGHT * 0.5), 12)
     );
 
-    private final PhysicsWorld world = new PhysicsWorld(List.of(state.cueBall()));
+    private PhysicsWorld world = createInitialWorld();
 
     private Vector2 mousePosition = state.cueBall().position();
     private SimulatorState simulatorState = SimulatorState.AIMING;
+    private boolean chargingShot = false;
+    private long shotChargeStartNanos = 0L;
+    private double lastChargeSeconds = 0.0;
 
     @Override
     public void start(Stage stage) {
@@ -61,11 +67,25 @@ public final class BilliardApp extends Application {
 
         canvas.setOnMouseMoved(event -> mousePosition = new Vector2(event.getX(), event.getY()));
         canvas.setOnMouseDragged(event -> mousePosition = new Vector2(event.getX(), event.getY()));
+        canvas.setOnMousePressed(event -> {
+            mousePosition = new Vector2(event.getX(), event.getY());
+            if (event.getButton() == MouseButton.PRIMARY && world.allBallsNearlyStopped()) {
+                chargingShot = true;
+                shotChargeStartNanos = System.nanoTime();
+                lastChargeSeconds = 0.0;
+            }
+        });
+        canvas.setOnMouseReleased(event -> {
+            mousePosition = new Vector2(event.getX(), event.getY());
+            if (event.getButton() == MouseButton.PRIMARY) {
+                releaseShot();
+            }
+        });
 
         Scene scene = new Scene(new StackPane(canvas), WINDOW_WIDTH, WINDOW_HEIGHT, Color.web("#1a1a1a"));
         scene.setOnKeyPressed(event -> {
-            if (event.getCode() == KeyCode.SPACE) {
-                world.setCueBallVelocity(new Vector2(800, 0));
+            if (event.getCode() == KeyCode.R) {
+                resetWorld();
             }
         });
 
@@ -123,7 +143,57 @@ public final class BilliardApp extends Application {
 
     private void update(double dtSeconds) {
         world.step(dtSeconds);
+        if (chargingShot) {
+            long elapsedNanos = Math.max(0L, System.nanoTime() - shotChargeStartNanos);
+            lastChargeSeconds = elapsedNanos / 1_000_000_000.0;
+        }
         simulatorState = world.cueBallSpeed() > 0 ? SimulatorState.MOVING : SimulatorState.AIMING;
+    }
+
+    private PhysicsWorld createInitialWorld() {
+        Ball cueBall = state.cueBall();
+        Ball targetBall = new Ball(
+                new Vector2(
+                        cueBall.position().x() + (cueBall.radius() * 3.2),
+                        cueBall.position().y()
+                ),
+                cueBall.radius()
+        );
+        TableBounds tableBounds = new TableBounds(
+                state.tableX(),
+                state.tableX() + state.tableWidth(),
+                state.tableY(),
+                state.tableY() + state.tableHeight()
+        );
+        return new PhysicsWorld(List.of(cueBall, targetBall), tableBounds);
+    }
+
+    private void releaseShot() {
+        if (!chargingShot) {
+            return;
+        }
+        chargingShot = false;
+
+        Ball cueBall = world.cueBall();
+        Vector2 toCursor = mousePosition.sub(cueBall.position());
+        double len = toCursor.length();
+        if (len < 1e-9) {
+            lastChargeSeconds = 0.0;
+            return;
+        }
+
+        double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
+        double speed = chargeRatio * PhysicsConstants.MAX_SHOT_SPEED;
+        Vector2 direction = toCursor.mul(1.0 / len);
+        world.setCueBallVelocity(direction.mul(speed));
+        lastChargeSeconds = 0.0;
+    }
+
+    private void resetWorld() {
+        world = createInitialWorld();
+        simulatorState = SimulatorState.AIMING;
+        chargingShot = false;
+        lastChargeSeconds = 0.0;
     }
 
     private void render(GraphicsContext gc, double fps) {
@@ -159,6 +229,14 @@ public final class BilliardApp extends Application {
         gc.setFont(Font.font("Consolas", 14));
         gc.fillText(String.format("FPS: %.1f", fps), 22, 33);
         gc.fillText("State: " + simulatorState, 22, 52);
+
+        double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
+        gc.setFill(Color.color(0.0, 0.0, 0.0, 0.6));
+        gc.fillRoundRect(12, 72, 210, 28, 8, 8);
+        gc.setFill(Color.web("#f5d142"));
+        gc.fillRoundRect(18, 78, 198 * chargeRatio, 16, 6, 6);
+        gc.setFill(Color.WHITE);
+        gc.fillText(String.format("Power: %d%%", (int) Math.round(chargeRatio * 100)), 230, 90);
     }
 
     public static void main(String[] args) {

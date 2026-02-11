@@ -6,13 +6,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class PhysicsWorld {
-    private final List<BallBody> balls;
+    private static final double BALL_MASS = 1.0;
+    private static final double COLLISION_EPS = 1e-9;
 
-    public PhysicsWorld(List<Ball> initialBalls) {
+    private final List<BallBody> balls;
+    private final TableBounds bounds;
+
+    public PhysicsWorld(List<Ball> initialBalls, TableBounds bounds) {
         balls = new ArrayList<>();
         for (Ball initialBall : initialBalls) {
             balls.add(new BallBody(initialBall, Vector2.ZERO));
         }
+        this.bounds = bounds;
     }
 
     public List<Ball> balls() {
@@ -30,11 +35,23 @@ public final class PhysicsWorld {
         return balls.get(0).ball;
     }
 
+    public Ball ball(int index) {
+        return balls.get(index).ball;
+    }
+
     public void setCueBallVelocity(Vector2 velocity) {
         if (balls.isEmpty()) {
             throw new IllegalStateException("No balls in world");
         }
         balls.get(0).velocity = velocity;
+    }
+
+    public void setBallVelocity(int index, Vector2 velocity) {
+        balls.get(index).velocity = velocity;
+    }
+
+    public Vector2 ballVelocity(int index) {
+        return balls.get(index).velocity;
     }
 
     public double cueBallSpeed() {
@@ -44,23 +61,116 @@ public final class PhysicsWorld {
         return balls.get(0).velocity.length();
     }
 
+    public boolean allBallsNearlyStopped() {
+        for (BallBody ballBody : balls) {
+            if (ballBody.velocity.length() >= PhysicsConstants.STOP_EPS) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public void step(double dtSeconds) {
         if (dtSeconds <= 0) {
             throw new IllegalArgumentException("dtSeconds must be positive");
         }
 
-        double decay = Math.max(0.0, 1.0 - (PhysicsConstants.FRICTION_PER_SEC * dtSeconds));
-
         for (BallBody ballBody : balls) {
-            Vector2 nextPosition = ballBody.ball.position().add(ballBody.velocity.mul(dtSeconds));
-            Vector2 nextVelocity = ballBody.velocity.mul(decay);
+            ballBody.ball = new Ball(ballBody.ball.position().add(ballBody.velocity.mul(dtSeconds)), ballBody.ball.radius());
+            resolveRailCollision(ballBody);
+        }
 
-            if (nextVelocity.length() < PhysicsConstants.STOP_EPS) {
-                nextVelocity = Vector2.ZERO;
+        resolveBallCollisions();
+        for (BallBody ballBody : balls) {
+            resolveRailCollision(ballBody);
+        }
+
+        double decay = Math.max(0.0, 1.0 - (PhysicsConstants.FRICTION_PER_SEC * dtSeconds));
+        for (BallBody ballBody : balls) {
+            ballBody.velocity = ballBody.velocity.mul(decay);
+            if (ballBody.velocity.length() < PhysicsConstants.STOP_EPS) {
+                ballBody.velocity = Vector2.ZERO;
             }
+        }
+    }
 
-            ballBody.ball = new Ball(nextPosition, ballBody.ball.radius());
-            ballBody.velocity = nextVelocity;
+    private void resolveRailCollision(BallBody ballBody) {
+        double r = ballBody.ball.radius();
+        double x = ballBody.ball.position().x();
+        double y = ballBody.ball.position().y();
+        double vx = ballBody.velocity.x();
+        double vy = ballBody.velocity.y();
+
+        if (x + r > bounds.right()) {
+            x = bounds.right() - r;
+            if (vx > 0) {
+                vx = -vx * PhysicsConstants.RAIL_RESTITUTION;
+            }
+        }
+        if (x - r < bounds.left()) {
+            x = bounds.left() + r;
+            if (vx < 0) {
+                vx = -vx * PhysicsConstants.RAIL_RESTITUTION;
+            }
+        }
+        if (y + r > bounds.bottom()) {
+            y = bounds.bottom() - r;
+            if (vy > 0) {
+                vy = -vy * PhysicsConstants.RAIL_RESTITUTION;
+            }
+        }
+        if (y - r < bounds.top()) {
+            y = bounds.top() + r;
+            if (vy < 0) {
+                vy = -vy * PhysicsConstants.RAIL_RESTITUTION;
+            }
+        }
+
+        ballBody.ball = new Ball(new Vector2(x, y), r);
+        ballBody.velocity = new Vector2(vx, vy);
+    }
+
+    private void resolveBallCollisions() {
+        for (int i = 0; i < balls.size() - 1; i++) {
+            BallBody a = balls.get(i);
+            for (int j = i + 1; j < balls.size(); j++) {
+                BallBody b = balls.get(j);
+
+                Vector2 delta = b.ball.position().sub(a.ball.position());
+                double minDistance = a.ball.radius() + b.ball.radius();
+                double minDistanceSq = minDistance * minDistance;
+                double distSq = delta.lengthSq();
+                if (distSq > minDistanceSq) {
+                    continue;
+                }
+
+                double distance = Math.sqrt(Math.max(distSq, 0.0));
+                Vector2 normal;
+                if (distance > COLLISION_EPS) {
+                    normal = delta.mul(1.0 / distance);
+                } else {
+                    normal = new Vector2(1.0, 0.0);
+                    distance = 0.0;
+                }
+
+                double penetration = minDistance - distance;
+                Vector2 correction = normal.mul(penetration * 0.5);
+                a.ball = new Ball(a.ball.position().sub(correction), a.ball.radius());
+                b.ball = new Ball(b.ball.position().add(correction), b.ball.radius());
+
+                Vector2 relativeVelocity = b.velocity.sub(a.velocity);
+                double velAlongNormal = (relativeVelocity.x() * normal.x()) + (relativeVelocity.y() * normal.y());
+                if (velAlongNormal >= 0.0) {
+                    continue;
+                }
+
+                double impulseMagnitude = -(1.0 + PhysicsConstants.RESTITUTION) * velAlongNormal;
+                impulseMagnitude /= (1.0 / BALL_MASS) + (1.0 / BALL_MASS);
+
+                Vector2 impulse = normal.mul(impulseMagnitude);
+                a.velocity = a.velocity.sub(impulse.mul(1.0 / BALL_MASS));
+                b.velocity = b.velocity.add(impulse.mul(1.0 / BALL_MASS));
+            }
         }
     }
 

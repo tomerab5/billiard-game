@@ -1,17 +1,35 @@
-Implement Milestone 2 (movement + friction) with minimal API surface and clean dependencies.
+Implement cushions + mouse hold-to-shoot.
+Requirements:
+Cushions / table borders
 
-Add Vector2 methods needed: add, sub, mul(scalar), length, lengthSq.
+Add a TableBounds (or similar) in physics: left, right, top, bottom in world coordinates.
 
-Create physics/PhysicsConstants with LINEAR_DAMPING_PER_SEC (or FRICTION_PER_SEC) and STOP_EPS.
+In PhysicsWorld.step(dt) after integration, resolve ball-vs-rect collisions (rails): clamp position and reflect velocity component, multiplying by RAIL_RESTITUTION constant in PhysicsConstants.
 
-Create physics/PhysicsWorld that owns a List<BallBody> OR uses existing game.Ball but keep JavaFX out.
+Ensure balls remain inside bounds and bounce naturally.
 
-step(dt) integrates: pos = pos + vel*dt; applies damping: vel = vel * max(0, 1 - damping*dt); if speed < eps -> vel=ZERO.
+Mouse hold-to-shoot
 
-Update BilliardApp to store a PhysicsWorld and render from it.
+Remove the “press 1” shot.
 
-Add SPACE key to apply a test impulse (set velocity) to cue ball.
+In BilliardApp, implement:
 
-Add PhysicsWorldTest: speed decreases; stops after enough steps.
+On primary mouse press: start charging if all balls are nearly stopped (speed < stop epsilon). Record press timestamp.
 
-Keep game state separate from ui and physics.
+While held: compute chargeSeconds and show a power indicator (simple bar or text).
+
+On release: compute shot direction from cue ball to mouse cursor, normalize it, compute speed = min(MAX_SHOT_SPEED, (chargeSeconds / CHARGE_TIME_TO_MAX) * MAX_SHOT_SPEED). Set cue ball velocity = direction * speed.
+
+Add constants in PhysicsConstants or a new InputConstants: MAX_SHOT_SPEED, CHARGE_TIME_TO_MAX.
+
+Keep physics classes free of JavaFX types.
+
+Tests
+
+Add/extend tests for rails:
+
+ball moving right hits right wall and vx becomes negative
+
+ball stays within bounds after step
+
+Ensure .\mvnw.cmd test passes and javafx:run lets me shoot by holding left click.
