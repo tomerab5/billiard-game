@@ -640,9 +640,24 @@ public final class BilliardApp extends Application {
 
             if (prediction.cueDeflectDirection != null && prediction.cueDeflectDirection.length() > 1e-6) {
                 Vector2 cueStart = prediction.hitPoint.add(prediction.cueDeflectDirection.mul(0.5));
-                double cueMaxT = distanceToRail(cueStart, prediction.cueDeflectDirection, cueBall.radius());
-                Vector2 cueAfter = cueStart.add(prediction.cueDeflectDirection.mul(Math.min(POST_COLLISION_PREVIEW_DISTANCE * 0.75, cueMaxT)));
+                PreviewHit secondHit = predictSegmentHit(cueStart, prediction.cueDeflectDirection, cueBall.radius(), cueBall, world.balls());
+                double cueSegLen = POST_COLLISION_PREVIEW_DISTANCE * 0.75;
+                Vector2 cueAfter = cueStart.add(prediction.cueDeflectDirection.normalized().mul(cueSegLen));
+                if (secondHit.type != HitType.NONE && secondHit.hitPoint != null) {
+                    double tHit = secondHit.hitPoint.sub(cueStart).length();
+                    if (tHit < cueSegLen) {
+                        cueAfter = secondHit.hitPoint;
+                    }
+                }
                 drawPostCollisionSegment(gc, cueStart, cueAfter, Color.color(1.0, 0.85, 0.58, 0.48), Color.color(1.0, 0.92, 0.72, 0.18));
+
+                if (secondHit.type == HitType.BALL && secondHit.normal != null && secondHit.hitPoint != null) {
+                    Vector2 impactedDir = secondHit.normal.normalized();
+                    Vector2 impactedStart = secondHit.hitPoint.add(impactedDir.mul(0.5));
+                    double impactedMaxT = distanceToRail(impactedStart, impactedDir, cueBall.radius());
+                    Vector2 impactedAfter = impactedStart.add(impactedDir.mul(Math.min(POST_COLLISION_PREVIEW_DISTANCE * 0.22, impactedMaxT)));
+                    drawPostCollisionSegment(gc, impactedStart, impactedAfter, Color.color(0.73, 0.90, 1.0, 0.78), Color.color(0.86, 0.96, 1.0, 0.24));
+                }
             }
         }
 
@@ -809,6 +824,85 @@ public final class BilliardApp extends Application {
         return bestT;
     }
 
+    private PreviewHit predictSegmentHit(Vector2 origin, Vector2 direction, double movingRadius, Ball movingBall, List<Ball> allBalls) {
+        Vector2 dir = direction.normalized();
+        if (dir.length() < 1e-9) {
+            return new PreviewHit(HitType.NONE, null, null, null);
+        }
+
+        double left = state.tableX() + movingRadius;
+        double right = state.tableX() + state.tableWidth() - movingRadius;
+        double top = state.tableY() + movingRadius;
+        double bottom = state.tableY() + state.tableHeight() - movingRadius;
+
+        double bestT = Double.POSITIVE_INFINITY;
+        HitType hitType = HitType.NONE;
+        Vector2 hitPoint = null;
+        Vector2 normal = null;
+        Ball hitBall = null;
+
+        if (dir.x() > 1e-9) {
+            double t = (right - origin.x()) / dir.x();
+            if (t > 1e-6 && t < bestT) {
+                bestT = t;
+                hitType = HitType.RAIL;
+                hitPoint = origin.add(dir.mul(t));
+                normal = new Vector2(-1, 0);
+            }
+        } else if (dir.x() < -1e-9) {
+            double t = (left - origin.x()) / dir.x();
+            if (t > 1e-6 && t < bestT) {
+                bestT = t;
+                hitType = HitType.RAIL;
+                hitPoint = origin.add(dir.mul(t));
+                normal = new Vector2(1, 0);
+            }
+        }
+        if (dir.y() > 1e-9) {
+            double t = (bottom - origin.y()) / dir.y();
+            if (t > 1e-6 && t < bestT) {
+                bestT = t;
+                hitType = HitType.RAIL;
+                hitPoint = origin.add(dir.mul(t));
+                normal = new Vector2(0, -1);
+            }
+        } else if (dir.y() < -1e-9) {
+            double t = (top - origin.y()) / dir.y();
+            if (t > 1e-6 && t < bestT) {
+                bestT = t;
+                hitType = HitType.RAIL;
+                hitPoint = origin.add(dir.mul(t));
+                normal = new Vector2(0, 1);
+            }
+        }
+
+        for (Ball ball : allBalls) {
+            if (ball == movingBall) {
+                continue;
+            }
+            Vector2 oc = origin.sub(ball.position());
+            double sumR = movingRadius + ball.radius();
+            double b = 2.0 * ((dir.x() * oc.x()) + (dir.y() * oc.y()));
+            double c = oc.lengthSq() - (sumR * sumR);
+            double disc = (b * b) - (4.0 * c);
+            if (disc < 0.0) {
+                continue;
+            }
+            double sqrtDisc = Math.sqrt(disc);
+            double t = (-b - sqrtDisc) * 0.5;
+            if (t <= 1e-6 || t >= bestT) {
+                continue;
+            }
+            bestT = t;
+            hitType = HitType.BALL;
+            hitPoint = origin.add(dir.mul(t));
+            normal = ball.position().sub(hitPoint).normalized();
+            hitBall = ball;
+        }
+
+        return new PreviewHit(hitType, hitPoint, normal, hitBall);
+    }
+
     private Prediction predictFirstCollision(Ball cueBall, Vector2 direction, List<Ball> allBalls) {
         Vector2 origin = cueBall.position();
         double cueRadius = cueBall.radius();
@@ -947,11 +1041,8 @@ public final class BilliardApp extends Application {
 
         Vector3 p1 = world.ballOrientation(index).rotate(MARKER_LOCAL_1);
         Vector3 p2 = world.ballOrientation(index).rotate(MARKER_LOCAL_2);
-        if (index == 0) {
-            drawSpinMarker(gc, ball, p1, Color.color(0.18, 0.22, 0.25, 0.62), 0.095);
-        } else {
-            drawSpinMarker(gc, ball, p2, Color.color(0.95, 0.96, 0.98, 0.36), 0.060);
-        }
+        drawSpinMarker(gc, ball, p1, Color.color(0.18, 0.22, 0.25, 0.62), 0.090);
+        drawSpinMarker(gc, ball, p2, Color.color(0.95, 0.96, 0.98, 0.40), 0.060);
     }
 
     private void drawSpinMarker(GraphicsContext gc, Ball ball, Vector3 p, Color color, double sizeMul) {
@@ -1242,6 +1333,20 @@ public final class BilliardApp extends Application {
             this.reflectionDirection = reflectionDirection;
             this.objectBallDirection = objectBallDirection;
             this.cueDeflectDirection = cueDeflectDirection;
+        }
+    }
+
+    private static final class PreviewHit {
+        private final HitType type;
+        private final Vector2 hitPoint;
+        private final Vector2 normal;
+        private final Ball hitBall;
+
+        private PreviewHit(HitType type, Vector2 hitPoint, Vector2 normal, Ball hitBall) {
+            this.type = type;
+            this.hitPoint = hitPoint;
+            this.normal = normal;
+            this.hitBall = hitBall;
         }
     }
 

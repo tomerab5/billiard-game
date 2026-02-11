@@ -259,7 +259,14 @@ public final class PhysicsWorld {
             integrateOrientation(ballBody, dtSeconds);
         }
 
-        balls.removeIf(this::isPotted);
+        balls.removeIf(body -> {
+            if (!isPotted(body)) {
+                return false;
+            }
+            body.velocity = Vector2.ZERO;
+            body.angularVelocity = Vector3.ZERO;
+            return true;
+        });
     }
 
     private void resolveRailCollision(BallBody ballBody) {
@@ -297,22 +304,6 @@ public final class PhysicsWorld {
         }
 
         ballBody.position = new Vector2(x, y);
-        resolveJawCollisions(ballBody);
-    }
-
-    private void resolveJawCollisions(BallBody body) {
-        for (ArcJaw jaw : pocketModel.jawArcs) {
-            Vector2 delta = body.position.sub(jaw.center);
-            double dist = delta.length();
-            double target = body.radius + jaw.radius;
-            if (dist >= target || dist <= 1e-9) {
-                continue;
-            }
-            Vector2 normal = delta.mul(1.0 / dist);
-            double penetration = target - dist;
-            body.position = body.position.add(normal.mul(penetration));
-            applyRailContactImpulse(body, normal);
-        }
     }
 
     private void applyRailContactImpulse(BallBody body, Vector2 normal) {
@@ -683,13 +674,21 @@ public final class PhysicsWorld {
         }
 
         private boolean isPotted(Vector2 p) {
-            boolean topMiddle = p.y() < top - dropDepth && Math.abs(p.x() - cx) <= mouthHalf * 0.62;
-            boolean bottomMiddle = p.y() > bottom + dropDepth && Math.abs(p.x() - cx) <= mouthHalf * 0.62;
-            boolean topLeft = p.x() < left - dropDepth && p.y() < top - dropDepth;
-            boolean topRight = p.x() > right + dropDepth && p.y() < top - dropDepth;
-            boolean bottomLeft = p.x() < left - dropDepth && p.y() > bottom + dropDepth;
-            boolean bottomRight = p.x() > right + dropDepth && p.y() > bottom + dropDepth;
-            return topMiddle || bottomMiddle || topLeft || topRight || bottomLeft || bottomRight;
+            double captureRadius = mouthHalf * 0.68;
+            Vector2[] centers = new Vector2[] {
+                    new Vector2(left, top),
+                    new Vector2(cx, top),
+                    new Vector2(right, top),
+                    new Vector2(left, bottom),
+                    new Vector2(cx, bottom),
+                    new Vector2(right, bottom)
+            };
+            for (Vector2 center : centers) {
+                if (p.sub(center).length() <= captureRadius) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }
