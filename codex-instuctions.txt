@@ -1,0 +1,20 @@
+Create a Java 17 project for a 2D billiards simulator using JavaFX 21.0.10.
+Use Maven Wrapper (so Maven does not need to be installed): include mvnw, mvnw.cmd, and .mvn/wrapper/maven-wrapper.properties configured to download Apache Maven 3.9.12.
+Add pom.xml with:
+
+Java 17 compiler settings
+
+JavaFX dependencies (javafx-controls) version 21.0.10
+
+org.openjfx:javafx-maven-plugin (so we can run javafx:run)
+Create package structure: ui, game, physics.
+Implement a runnable JavaFX app that opens a window and draws:
+
+pool table rectangle
+
+6 pockets
+
+1 ball (circle) on a Canvas
+Add a simple loop that redraws continuously.
+Add README.md with how to run using .\mvnw.cmd javafx:run and how to test.
+Add SPEC.md describing MVP scope (top-down 2D, no spin initially).

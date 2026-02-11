@@ -1,0 +1,5 @@
+com\billiardgame\game\TableState.class
+com\billiardgame\game\Ball.class
+com\billiardgame\ui\BilliardApp.class
+com\billiardgame\physics\Vector2.class
+com\billiardgame\ui\BilliardApp$1.class
