@@ -54,6 +54,19 @@ final class PhysicsWorldTest {
     }
 
     @Test
+    void rollingDecelApplied() {
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, 1.0);
+        world.setCueBallVelocity(new Vector2(0.20, 0.0));
+        world.setBallAngularVelocity(0, new Vector3(0.0, 0.20 / 12.0, 0.0));
+
+        double before = world.cueBallSpeed();
+        world.step(1.0);
+        double after = world.cueBallSpeed();
+
+        assertTrue(after < before);
+    }
+
+    @Test
     void wzDecaysOverTime() {
         PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
         world.setBallAngularVelocity(0, new Vector3(0, 0, 30));

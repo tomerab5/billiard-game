@@ -16,6 +16,7 @@ public final class PhysicsWorld {
     private final List<BallBody> balls;
     private final TableBounds bounds;
     private final double pixelsPerMeter;
+    private double muRolling;
 
     public PhysicsWorld(List<Ball> initialBalls, TableBounds bounds) {
         this(initialBalls, bounds, 1.0);
@@ -42,6 +43,7 @@ public final class PhysicsWorld {
                 toMeters(bounds.top()),
                 toMeters(bounds.bottom())
         );
+        this.muRolling = PhysicsConfig.DEFAULT_MU_ROLLING;
     }
 
     public List<Ball> balls() {
@@ -98,6 +100,26 @@ public final class PhysicsWorld {
             throw new IllegalStateException("No balls in world");
         }
         return toPixels(balls.get(0).velocity).length();
+    }
+
+    public double rollingFriction() {
+        return muRolling;
+    }
+
+    public double rollingDecelMps2() {
+        return muRolling * PhysicsConfig.G_M_PER_S2;
+    }
+
+    public void increaseRollingFriction(double delta) {
+        setRollingFriction(muRolling + delta);
+    }
+
+    public void decreaseRollingFriction(double delta) {
+        setRollingFriction(muRolling - delta);
+    }
+
+    public void setRollingFriction(double value) {
+        muRolling = Math.max(PhysicsConfig.MIN_MU_ROLLING, Math.min(PhysicsConfig.MAX_MU_ROLLING, value));
     }
 
     public boolean allBallsNearlyStopped() {
@@ -267,7 +289,7 @@ public final class PhysicsWorld {
         }
 
         if (speed > 0.0) {
-            double aRoll = PhysicsConfig.MU_ROLLING * PhysicsConfig.G_M_PER_S2;
+            double aRoll = muRolling * PhysicsConfig.G_M_PER_S2;
             double newSpeed = Math.max(0.0, speed - (aRoll * dtSeconds));
             ballBody.velocity = v.normalized().mul(newSpeed);
         } else {

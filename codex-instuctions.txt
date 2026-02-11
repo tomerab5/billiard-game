@@ -1,1 +1,13 @@
-make the line predicting ball tragectory more acurate showing tragectory after first collission with either ball or tabel sides
+Tune rolling realism:
+
+Ensure rolling phase uses constant decel: a = μ_r * g opposite velocity direction.
+
+Set default μ_r = 0.013 and μ_s typical 0.2 (unchanged).
+
+Raise stop threshold slightly (e.g., stop when speed < 0.03 m/s).
+
+Add runtime tuning: [ decreases μ_r by 0.001, ] increases by 0.001 (clamp 0.005..0.024).
+
+Display μ_r, a_roll (=μ_r*g), and cue-ball speed in HUD.
+
+Tests should remain non-brittle (no exact distances), just “eventually stops” and “rolling decel applied.”
