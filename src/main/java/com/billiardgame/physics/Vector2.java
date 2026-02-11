@@ -38,4 +38,12 @@ public final class Vector2 {
     public double lengthSq() {
         return (x * x) + (y * y);
     }
+
+    public Vector2 normalized() {
+        double len = length();
+        if (len <= 1e-12) {
+            return ZERO;
+        }
+        return mul(1.0 / len);
+    }
 }

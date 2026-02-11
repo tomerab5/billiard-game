@@ -63,7 +63,7 @@ public final class PhysicsWorld {
 
     public boolean allBallsNearlyStopped() {
         for (BallBody ballBody : balls) {
-            if (ballBody.velocity.length() >= PhysicsConstants.STOP_EPS) {
+            if (ballBody.velocity.length() >= PhysicsConstants.STOP_EPS_PX_PER_S) {
                 return false;
             }
         }
@@ -85,12 +85,18 @@ public final class PhysicsWorld {
             resolveRailCollision(ballBody);
         }
 
-        double decay = Math.max(0.0, 1.0 - (PhysicsConstants.FRICTION_PER_SEC * dtSeconds));
         for (BallBody ballBody : balls) {
-            ballBody.velocity = ballBody.velocity.mul(decay);
-            if (ballBody.velocity.length() < PhysicsConstants.STOP_EPS) {
+            double speed = ballBody.velocity.length();
+            if (speed <= PhysicsConstants.STOP_EPS_PX_PER_S) {
                 ballBody.velocity = Vector2.ZERO;
+                continue;
             }
+
+            double decel = speed > PhysicsConstants.ROLLING_THRESHOLD_PX_PER_S
+                    ? PhysicsConstants.SLIDING_DECEL_PX_PER_S2
+                    : PhysicsConstants.ROLLING_DECEL_PX_PER_S2;
+            double newSpeed = Math.max(0.0, speed - (decel * dtSeconds));
+            ballBody.velocity = ballBody.velocity.normalized().mul(newSpeed);
         }
     }
 

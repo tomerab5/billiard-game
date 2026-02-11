@@ -1,35 +1,37 @@
-Implement cushions + mouse hold-to-shoot.
+Replace the current damping/friction with a two-phase deceleration model (sliding vs rolling) for more realistic billiards feel.
 Requirements:
-Cushions / table borders
 
-Add a TableBounds (or similar) in physics: left, right, top, bottom in world coordinates.
+In PhysicsConstants, add:
 
-In PhysicsWorld.step(dt) after integration, resolve ball-vs-rect collisions (rails): clamp position and reflect velocity component, multiplying by RAIL_RESTITUTION constant in PhysicsConstants.
+double SLIDING_DECEL_PX_PER_S2 (e.g., 900)
 
-Ensure balls remain inside bounds and bounce naturally.
+double ROLLING_DECEL_PX_PER_S2 (e.g., 220)
 
-Mouse hold-to-shoot
+double ROLLING_THRESHOLD_PX_PER_S (e.g., 250)
 
-Remove the “press 1” shot.
+keep STOP_EPS_PX_PER_S (e.g., 8)
 
-In BilliardApp, implement:
+In PhysicsWorld.step(dt) after integrating positions, apply friction like:
 
-On primary mouse press: start charging if all balls are nearly stopped (speed < stop epsilon). Record press timestamp.
+compute speed s = vel.length()
 
-While held: compute chargeSeconds and show a power indicator (simple bar or text).
+if s <= STOP_EPS => vel = Vector2.ZERO
 
-On release: compute shot direction from cue ball to mouse cursor, normalize it, compute speed = min(MAX_SHOT_SPEED, (chargeSeconds / CHARGE_TIME_TO_MAX) * MAX_SHOT_SPEED). Set cue ball velocity = direction * speed.
+else choose decel = (s > ROLLING_THRESHOLD ? SLIDING_DECEL : ROLLING_DECEL)
 
-Add constants in PhysicsConstants or a new InputConstants: MAX_SHOT_SPEED, CHARGE_TIME_TO_MAX.
+reduce speed: newS = max(0, s - decel * dt)
 
-Keep physics classes free of JavaFX types.
+set vel = vel.normalized() * newS (avoid divide-by-zero)
 
-Tests
+Keep collision response as-is; friction should act every tick.
 
-Add/extend tests for rails:
+Update debug overlay to show which mode is active for the cue ball: “SLIDE” or “ROLL” and current speed.
 
-ball moving right hits right wall and vx becomes negative
+Update/relax tests:
 
-ball stays within bounds after step
+speed decreases after step
 
-Ensure .\mvnw.cmd test passes and javafx:run lets me shoot by holding left click.
+eventually stops after enough steps
+(avoid asserting exact numeric values)
+
+Ensure .\mvnw.cmd test passes and javafx:run feels more realistic.
