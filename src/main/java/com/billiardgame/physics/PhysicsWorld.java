@@ -17,6 +17,55 @@ public final class PhysicsWorld {
     private final TableBounds bounds;
     private final double pixelsPerMeter;
     private double muRolling;
+    private final PocketModel pocketModel;
+
+    public static final class DebugSegment {
+        private final Vector2 a;
+        private final Vector2 b;
+
+        public DebugSegment(Vector2 a, Vector2 b) {
+            this.a = a;
+            this.b = b;
+        }
+
+        public Vector2 a() {
+            return a;
+        }
+
+        public Vector2 b() {
+            return b;
+        }
+    }
+
+    public static final class DebugArc {
+        private final Vector2 center;
+        private final double radius;
+        private final double startDeg;
+        private final double sweepDeg;
+
+        public DebugArc(Vector2 center, double radius, double startDeg, double sweepDeg) {
+            this.center = center;
+            this.radius = radius;
+            this.startDeg = startDeg;
+            this.sweepDeg = sweepDeg;
+        }
+
+        public Vector2 center() {
+            return center;
+        }
+
+        public double radius() {
+            return radius;
+        }
+
+        public double startDeg() {
+            return startDeg;
+        }
+
+        public double sweepDeg() {
+            return sweepDeg;
+        }
+    }
 
     public PhysicsWorld(List<Ball> initialBalls, TableBounds bounds) {
         this(initialBalls, bounds, 1.0);
@@ -44,6 +93,7 @@ public final class PhysicsWorld {
                 toMeters(bounds.bottom())
         );
         this.muRolling = PhysicsConfig.DEFAULT_MU_ROLLING;
+        this.pocketModel = PocketModel.fromBounds(this.bounds, PhysicsConfig.BALL_RADIUS_M);
     }
 
     public List<Ball> balls() {
@@ -165,6 +215,26 @@ public final class PhysicsWorld {
         return true;
     }
 
+    public int ballCount() {
+        return balls.size();
+    }
+
+    public List<DebugSegment> pocketMouthSegmentsPx() {
+        List<DebugSegment> out = new ArrayList<>();
+        for (Segment2 s : pocketModel.mouthSegments) {
+            out.add(new DebugSegment(toPixels(s.a), toPixels(s.b)));
+        }
+        return List.copyOf(out);
+    }
+
+    public List<DebugArc> pocketJawArcsPx() {
+        List<DebugArc> out = new ArrayList<>();
+        for (ArcJaw a : pocketModel.jawArcs) {
+            out.add(new DebugArc(toPixels(a.center), toPixels(a.radius), a.startDeg, a.sweepDeg));
+        }
+        return List.copyOf(out);
+    }
+
     public void step(double dtSeconds) {
         if (dtSeconds <= 0) {
             throw new IllegalArgumentException("dtSeconds must be positive");
@@ -183,6 +253,8 @@ public final class PhysicsWorld {
         for (BallBody ballBody : balls) {
             applyClothInteraction(ballBody, dtSeconds);
         }
+
+        balls.removeIf(this::isPotted);
     }
 
     private void resolveRailCollision(BallBody ballBody) {
@@ -191,27 +263,51 @@ public final class PhysicsWorld {
         double y = ballBody.position.y();
 
         if (x + r > bounds.right()) {
-            x = bounds.right() - r;
-            ballBody.position = new Vector2(x, y);
-            applyRailContactImpulse(ballBody, new Vector2(-1, 0));
+            if (!pocketModel.inRightOpening(y)) {
+                x = bounds.right() - r;
+                ballBody.position = new Vector2(x, y);
+                applyRailContactImpulse(ballBody, new Vector2(-1, 0));
+            }
         }
         if (x - r < bounds.left()) {
-            x = bounds.left() + r;
-            ballBody.position = new Vector2(x, y);
-            applyRailContactImpulse(ballBody, new Vector2(1, 0));
+            if (!pocketModel.inLeftOpening(y)) {
+                x = bounds.left() + r;
+                ballBody.position = new Vector2(x, y);
+                applyRailContactImpulse(ballBody, new Vector2(1, 0));
+            }
         }
         if (y + r > bounds.bottom()) {
-            y = bounds.bottom() - r;
-            ballBody.position = new Vector2(x, y);
-            applyRailContactImpulse(ballBody, new Vector2(0, -1));
+            if (!pocketModel.inBottomOpening(x)) {
+                y = bounds.bottom() - r;
+                ballBody.position = new Vector2(x, y);
+                applyRailContactImpulse(ballBody, new Vector2(0, -1));
+            }
         }
         if (y - r < bounds.top()) {
-            y = bounds.top() + r;
-            ballBody.position = new Vector2(x, y);
-            applyRailContactImpulse(ballBody, new Vector2(0, 1));
+            if (!pocketModel.inTopOpening(x)) {
+                y = bounds.top() + r;
+                ballBody.position = new Vector2(x, y);
+                applyRailContactImpulse(ballBody, new Vector2(0, 1));
+            }
         }
 
         ballBody.position = new Vector2(x, y);
+        resolveJawCollisions(ballBody);
+    }
+
+    private void resolveJawCollisions(BallBody body) {
+        for (ArcJaw jaw : pocketModel.jawArcs) {
+            Vector2 delta = body.position.sub(jaw.center);
+            double dist = delta.length();
+            double target = body.radius + jaw.radius;
+            if (dist >= target || dist <= 1e-9) {
+                continue;
+            }
+            Vector2 normal = delta.mul(1.0 / dist);
+            double penetration = target - dist;
+            body.position = body.position.add(normal.mul(penetration));
+            applyRailContactImpulse(body, normal);
+        }
     }
 
     private void applyRailContactImpulse(BallBody body, Vector2 normal) {
@@ -344,6 +440,10 @@ public final class PhysicsWorld {
         );
     }
 
+    private boolean isPotted(BallBody body) {
+        return pocketModel.isPotted(body.position);
+    }
+
     private void applyClothInteraction(BallBody ballBody, double dtSeconds) {
         Vector2 v = ballBody.velocity;
         Vector3 w = ballBody.angularVelocity;
@@ -459,6 +559,118 @@ public final class PhysicsWorld {
             this.radius = radius;
             this.mass = mass;
             this.mode = MotionMode.SLIDING;
+        }
+    }
+
+    private static final class Segment2 {
+        private final Vector2 a;
+        private final Vector2 b;
+
+        private Segment2(Vector2 a, Vector2 b) {
+            this.a = a;
+            this.b = b;
+        }
+    }
+
+    private static final class ArcJaw {
+        private final Vector2 center;
+        private final double radius;
+        private final double startDeg;
+        private final double sweepDeg;
+
+        private ArcJaw(Vector2 center, double radius, double startDeg, double sweepDeg) {
+            this.center = center;
+            this.radius = radius;
+            this.startDeg = startDeg;
+            this.sweepDeg = sweepDeg;
+        }
+    }
+
+    private static final class PocketModel {
+        private final double left;
+        private final double right;
+        private final double top;
+        private final double bottom;
+        private final double cx;
+        private final double mouthHalf;
+        private final double cornerMouth;
+        private final double dropDepth;
+        private final List<Segment2> mouthSegments;
+        private final List<ArcJaw> jawArcs;
+
+        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<Segment2> mouthSegments, List<ArcJaw> jawArcs) {
+            this.left = left;
+            this.right = right;
+            this.top = top;
+            this.bottom = bottom;
+            this.cx = cx;
+            this.mouthHalf = mouthHalf;
+            this.cornerMouth = cornerMouth;
+            this.dropDepth = dropDepth;
+            this.mouthSegments = mouthSegments;
+            this.jawArcs = jawArcs;
+        }
+
+        private static PocketModel fromBounds(TableBounds b, double ballRadius) {
+            double left = b.left();
+            double right = b.right();
+            double top = b.top();
+            double bottom = b.bottom();
+            double cx = (left + right) * 0.5;
+            double mouthHalf = ballRadius * 2.2;
+            double cornerMouth = ballRadius * 2.9;
+            double dropDepth = ballRadius * 1.55;
+            double jawR = ballRadius * 0.92;
+
+            List<Segment2> segs = new ArrayList<>();
+            segs.add(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(cx - mouthHalf, top)));
+            segs.add(new Segment2(new Vector2(cx + mouthHalf, top), new Vector2(right - cornerMouth, top)));
+            segs.add(new Segment2(new Vector2(left + cornerMouth, bottom), new Vector2(cx - mouthHalf, bottom)));
+            segs.add(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(right - cornerMouth, bottom)));
+            segs.add(new Segment2(new Vector2(left, top + cornerMouth), new Vector2(left, bottom - cornerMouth)));
+            segs.add(new Segment2(new Vector2(right, top + cornerMouth), new Vector2(right, bottom - cornerMouth)));
+
+            List<ArcJaw> jaws = new ArrayList<>();
+            jaws.add(new ArcJaw(new Vector2(left + cornerMouth, top + jawR), jawR, 180, 90));
+            jaws.add(new ArcJaw(new Vector2(left + jawR, top + cornerMouth), jawR, 270, 90));
+            jaws.add(new ArcJaw(new Vector2(right - cornerMouth, top + jawR), jawR, 270, 90));
+            jaws.add(new ArcJaw(new Vector2(right - jawR, top + cornerMouth), jawR, 180, 90));
+            jaws.add(new ArcJaw(new Vector2(left + cornerMouth, bottom - jawR), jawR, 90, 90));
+            jaws.add(new ArcJaw(new Vector2(left + jawR, bottom - cornerMouth), jawR, 0, 90));
+            jaws.add(new ArcJaw(new Vector2(right - cornerMouth, bottom - jawR), jawR, 0, 90));
+            jaws.add(new ArcJaw(new Vector2(right - jawR, bottom - cornerMouth), jawR, 90, 90));
+            jaws.add(new ArcJaw(new Vector2(cx - mouthHalf, top + jawR), jawR, 180, 90));
+            jaws.add(new ArcJaw(new Vector2(cx + mouthHalf, top + jawR), jawR, 270, 90));
+            jaws.add(new ArcJaw(new Vector2(cx - mouthHalf, bottom - jawR), jawR, 90, 90));
+            jaws.add(new ArcJaw(new Vector2(cx + mouthHalf, bottom - jawR), jawR, 0, 90));
+
+            return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(jaws));
+        }
+
+        private boolean inTopOpening(double x) {
+            return x <= left + cornerMouth || x >= right - cornerMouth || Math.abs(x - cx) <= mouthHalf;
+        }
+
+        private boolean inBottomOpening(double x) {
+            return inTopOpening(x);
+        }
+
+        private boolean inLeftOpening(double y) {
+            return y <= top + cornerMouth || y >= bottom - cornerMouth;
+        }
+
+        private boolean inRightOpening(double y) {
+            return inLeftOpening(y);
+        }
+
+        private boolean isPotted(Vector2 p) {
+            boolean topMiddle = p.y() < top - dropDepth && Math.abs(p.x() - cx) <= mouthHalf * 0.62;
+            boolean bottomMiddle = p.y() > bottom + dropDepth && Math.abs(p.x() - cx) <= mouthHalf * 0.62;
+            boolean topLeft = p.x() < left - dropDepth && p.y() < top - dropDepth;
+            boolean topRight = p.x() > right + dropDepth && p.y() < top - dropDepth;
+            boolean bottomLeft = p.x() < left - dropDepth && p.y() > bottom + dropDepth;
+            boolean bottomRight = p.x() > right + dropDepth && p.y() > bottom + dropDepth;
+            return topMiddle || bottomMiddle || topLeft || topRight || bottomLeft || bottomRight;
         }
     }
 }

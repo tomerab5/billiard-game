@@ -1,34 +1,20 @@
-Implement cue–ball strike with tip offset and spin generation.
+Implement realistic pocket mouths (jaws) and pocket acceptance.
 Requirements:
 
-Replace “set velocity on release” with a CueStrike model:
+Define pocket geometry:
 
-On mouse release, compute cue direction in table plane.
+6 pockets with mouth opening segments + rounded jaw arcs (2D).
 
-Add an aiming UI for tip offset:
+Model them as collision primitives (line segments + arcs) that interact like rails (normal/tangent impulses).
 
-While aiming, show a small marker on the cue ball indicating hit point (dx, dy) relative to center in ball-radius units.
+“Shelf”/drop rule:
 
-Use mouse wheel or right-drag to adjust offset, clamp to a safe max (e.g., 0.6R) to avoid impossible hits.
-
-Compute an impulse J along cue direction based on charge (existing).
-
-Convert tip offset into angular impulse:
-
-Apply linear impulse at an offset point on the ball surface so w changes via Δw = I^{-1}(r×J).
-
-Add a simple miscue limit:
-
-Cap tangential component based on mu_tip * Jn (use a configurable MU_TIP).
+Once the ball center crosses a defined “drop line” inside the pocket, mark it potted and remove from world.
 
 Add tests:
 
-Top hit -> positive roll (w makes ball “follow”).
+Straight-in slow shot pots reliably.
 
-Bottom hit -> draw behavior (w opposite direction).
+A fast shot near jaw can rattle and not always pot (deterministic test: choose a specific setup that should reject).
 
-Add keys:
-
-C centers tip.
-
-X quick presets: center/top/bottom/left/right.
+Add a debug draw toggle showing pocket primitives.

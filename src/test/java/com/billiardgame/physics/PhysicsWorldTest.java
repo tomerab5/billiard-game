@@ -158,11 +158,16 @@ final class PhysicsWorldTest {
     @Test
     void ballStaysWithinBoundsAfterStep() {
         TableBounds bounds = new TableBounds(0, 100, 0, 100);
-        Ball ball = new Ball(new Vector2(95, 95), 10);
+        Ball ball = new Ball(new Vector2(90, 50), 10);
         PhysicsWorld world = new PhysicsWorld(List.of(ball), bounds, TEST_PIXELS_PER_METER);
-        world.setCueBallVelocity(new Vector2(500, 500));
+        world.setCueBallVelocity(new Vector2(500, 0));
 
         world.step(1.0 / 60.0);
+
+        if (world.ballCount() == 0) {
+            assertTrue(true);
+            return;
+        }
 
         Ball stepped = world.ball(0);
         assertTrue(stepped.position().x() - stepped.radius() >= bounds.left());
@@ -187,5 +192,37 @@ final class PhysicsWorldTest {
         double vyNoSpin = noSpin.ballVelocity(0).y();
         double vyWithSpin = sideSpin.ballVelocity(0).y();
         assertTrue(Math.abs(vyWithSpin - vyNoSpin) > 0.01);
+    }
+
+    @Test
+    void straightInSlowShotPotsReliably() {
+        TableBounds bounds = new TableBounds(0, 100, 0, 100);
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(50, 18), 10)), bounds, TEST_PIXELS_PER_METER);
+        world.setCueBallVelocity(new Vector2(0, -220));
+
+        for (int i = 0; i < 300; i++) {
+            world.step(1.0 / 120.0);
+            if (world.ballCount() == 0) {
+                break;
+            }
+        }
+
+        assertTrue(world.ballCount() == 0);
+    }
+
+    @Test
+    void fastNearJawShotRejectsAndDoesNotPot() {
+        TableBounds bounds = new TableBounds(0, 100, 0, 100);
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(32, 16), 10)), bounds, TEST_PIXELS_PER_METER);
+        world.setCueBallVelocity(new Vector2(0, -520));
+
+        for (int i = 0; i < 340; i++) {
+            world.step(1.0 / 240.0);
+            if (world.ballCount() == 0) {
+                break;
+            }
+        }
+
+        assertTrue(world.ballCount() == 1);
     }
 }

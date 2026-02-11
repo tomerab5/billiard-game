@@ -78,6 +78,7 @@ public final class BilliardApp extends Application {
     private long shotChargeStartNanos = 0L;
     private double lastChargeSeconds = 0.0;
     private boolean showSpinDebug = false;
+    private boolean showPocketDebug = false;
     private Vector2 tipOffsetNorm = Vector2.ZERO;
     private int tipPresetIndex = 0;
     private boolean rightDragTip = false;
@@ -130,6 +131,8 @@ public final class BilliardApp extends Application {
                 world.increaseRollingFriction(0.001);
             } else if (event.getCode() == KeyCode.T) {
                 showSpinDebug = !showSpinDebug;
+            } else if (event.getCode() == KeyCode.P) {
+                showPocketDebug = !showPocketDebug;
             } else if (event.getCode() == KeyCode.C) {
                 tipOffsetNorm = Vector2.ZERO;
                 tipPresetIndex = 0;
@@ -250,10 +253,35 @@ public final class BilliardApp extends Application {
     private void render(GraphicsContext gc, double fps, double timeSeconds) {
         drawRoomBackground(gc, timeSeconds);
         drawTable(gc, timeSeconds);
+        drawPocketDebug(gc);
         drawAimGuide(gc);
         drawBalls(gc);
         drawBloomPass(gc, timeSeconds);
         drawHud(gc, fps);
+    }
+
+    private void drawPocketDebug(GraphicsContext gc) {
+        if (!showPocketDebug) {
+            return;
+        }
+        gc.setStroke(Color.color(0.40, 0.95, 1.0, 0.75));
+        gc.setLineWidth(1.6);
+        for (PhysicsWorld.DebugSegment s : world.pocketMouthSegmentsPx()) {
+            gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+        }
+        gc.setStroke(Color.color(1.0, 0.65, 0.35, 0.70));
+        gc.setLineWidth(1.4);
+        for (PhysicsWorld.DebugArc a : world.pocketJawArcsPx()) {
+            gc.strokeArc(
+                    a.center().x() - a.radius(),
+                    a.center().y() - a.radius(),
+                    a.radius() * 2,
+                    a.radius() * 2,
+                    a.startDeg(),
+                    a.sweepDeg(),
+                    javafx.scene.shape.ArcType.OPEN
+            );
+        }
     }
 
     private void drawRoomBackground(GraphicsContext gc, double t) {
