@@ -138,6 +138,10 @@ public final class PhysicsWorld {
         return balls.get(index).angularVelocity;
     }
 
+    public Quaternion ballOrientation(int index) {
+        return balls.get(index).orientation;
+    }
+
     public MotionMode cueBallMotionMode() {
         if (balls.isEmpty()) {
             throw new IllegalStateException("No balls in world");
@@ -252,6 +256,7 @@ public final class PhysicsWorld {
 
         for (BallBody ballBody : balls) {
             applyClothInteraction(ballBody, dtSeconds);
+            integrateOrientation(ballBody, dtSeconds);
         }
 
         balls.removeIf(this::isPotted);
@@ -524,6 +529,18 @@ public final class PhysicsWorld {
         return Math.copySign(decayed, wz);
     }
 
+    private void integrateOrientation(BallBody body, double dtSeconds) {
+        Vector3 w = body.angularVelocity;
+        double omega = w.length();
+        double angle = omega * dtSeconds;
+        if (angle < 1e-8) {
+            return;
+        }
+        Vector3 axis = w.normalized();
+        Quaternion dq = Quaternion.fromAxisAngle(axis, angle);
+        body.orientation = dq.mul(body.orientation).normalize();
+    }
+
     private Ball toRenderBall(BallBody body) {
         return new Ball(toPixels(body.position), toPixels(body.radius));
     }
@@ -548,6 +565,7 @@ public final class PhysicsWorld {
         private Vector2 position;
         private Vector2 velocity;
         private Vector3 angularVelocity;
+        private Quaternion orientation;
         private final double radius;
         private final double mass;
         private MotionMode mode;
@@ -556,6 +574,7 @@ public final class PhysicsWorld {
             this.position = position;
             this.velocity = velocity;
             this.angularVelocity = angularVelocity;
+            this.orientation = Quaternion.IDENTITY;
             this.radius = radius;
             this.mass = mass;
             this.mode = MotionMode.SLIDING;

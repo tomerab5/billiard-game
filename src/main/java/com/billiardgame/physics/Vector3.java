@@ -44,4 +44,12 @@ public final class Vector3 {
     public double lengthSq() {
         return (x * x) + (y * y) + (z * z);
     }
+
+    public Vector3 normalized() {
+        double len = length();
+        if (len <= 1e-12) {
+            return ZERO;
+        }
+        return mul(1.0 / len);
+    }
 }

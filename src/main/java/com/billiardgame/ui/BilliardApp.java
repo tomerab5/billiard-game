@@ -7,6 +7,7 @@ import com.billiardgame.physics.PhysicsConstants;
 import com.billiardgame.physics.PhysicsWorld;
 import com.billiardgame.physics.TableBounds;
 import com.billiardgame.physics.Vector2;
+import com.billiardgame.physics.Vector3;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.scene.Scene;
@@ -42,6 +43,13 @@ public final class BilliardApp extends Application {
     private static final double PREDICTION_MAX_DISTANCE = 1400.0;
     private static final double POST_COLLISION_PREVIEW_DISTANCE = 260.0;
     private static final double TIP_OFFSET_MAX = 0.60;
+    private static final double AMBIENT = 0.25;
+    private static final double DIFFUSE = 0.75;
+    private static final double SPECULAR = 0.6;
+    private static final double SPECULAR_SIZE_RATIO = 0.35;
+    private static final Vector2 LIGHT_DIR_SCREEN = new Vector2(-0.76, -0.65).normalized();
+    private static final Vector3 MARKER_LOCAL_1 = unit(0.6, 0.2, 0.77).mul(PhysicsConfig.BALL_RADIUS_M);
+    private static final Vector3 MARKER_LOCAL_2 = unit(-0.3, 0.7, 0.64).mul(PhysicsConfig.BALL_RADIUS_M);
 
     private enum SimulatorState {
         AIMING,
@@ -78,6 +86,8 @@ public final class BilliardApp extends Application {
     private long shotChargeStartNanos = 0L;
     private double lastChargeSeconds = 0.0;
     private boolean showSpinDebug = false;
+    private boolean showSpinMarkers = true;
+    private boolean showBallShading = true;
     private boolean showPocketDebug = false;
     private Vector2 tipOffsetNorm = Vector2.ZERO;
     private int tipPresetIndex = 0;
@@ -131,6 +141,10 @@ public final class BilliardApp extends Application {
                 world.increaseRollingFriction(0.001);
             } else if (event.getCode() == KeyCode.T) {
                 showSpinDebug = !showSpinDebug;
+            } else if (event.getCode() == KeyCode.V) {
+                showSpinMarkers = !showSpinMarkers;
+            } else if (event.getCode() == KeyCode.H) {
+                showBallShading = !showBallShading;
             } else if (event.getCode() == KeyCode.P) {
                 showPocketDebug = !showPocketDebug;
             } else if (event.getCode() == KeyCode.C) {
@@ -651,6 +665,7 @@ public final class BilliardApp extends Application {
         for (int i = 0; i < balls.size(); i++) {
             Ball ball = balls.get(i);
             drawBall(gc, ball, i);
+            drawSpinMarkers(gc, ball, i);
             if (showSpinDebug) {
                 double wz = world.ballAngularVelocity(i).z();
                 gc.setFill(Color.color(0.90, 0.95, 1.0, 0.92));
@@ -681,38 +696,83 @@ public final class BilliardApp extends Application {
         }
     }
 
+    private void drawSpinMarkers(GraphicsContext gc, Ball ball, int index) {
+        if (!showSpinMarkers) {
+            return;
+        }
+
+        Vector3 p1 = world.ballOrientation(index).rotate(MARKER_LOCAL_1);
+        Vector3 p2 = world.ballOrientation(index).rotate(MARKER_LOCAL_2);
+        drawSpinMarker(gc, ball, p1, Color.color(0.08, 0.09, 0.10, 0.95));
+        drawSpinMarker(gc, ball, p2, Color.color(0.93, 0.95, 0.98, 0.95));
+    }
+
+    private void drawSpinMarker(GraphicsContext gc, Ball ball, Vector3 p, Color color) {
+        if (p.z() <= 0.0) {
+            return;
+        }
+        double screenX = ball.position().x() + (p.x() * PIXELS_PER_METER);
+        double screenY = ball.position().y() - (p.y() * PIXELS_PER_METER);
+        double zNorm = clamp01(p.z() / PhysicsConfig.BALL_RADIUS_M);
+        double zScale = 0.5 + 0.5 * zNorm;
+        double r = Math.max(1.4, ball.radius() * 0.12 * zScale);
+        double alpha = 0.20 + 0.80 * zNorm;
+        Color fill = Color.color(color.getRed(), color.getGreen(), color.getBlue(), color.getOpacity() * alpha);
+
+        gc.setFill(fill);
+        gc.fillOval(screenX - r, screenY - r, r * 2, r * 2);
+        gc.setStroke(Color.color(0, 0, 0, 0.45));
+        gc.setLineWidth(0.8);
+        gc.strokeOval(screenX - r, screenY - r, r * 2, r * 2);
+    }
+
     private void drawBall(GraphicsContext gc, Ball ball, int index) {
         double x = ball.position().x();
         double y = ball.position().y();
         double r = ball.radius();
-
-        gc.setFill(Color.color(0, 0, 0, 0.35));
-        gc.fillOval(x - r + 2.5, y - r + 4, r * 2, r * 2);
-
         Color midColor = index == 0 ? Color.web("#f4f4f4") : Color.web("#d84d4d");
         Color edgeColor = index == 0 ? Color.web("#cfcfcf") : Color.web("#8b2323");
+        double lightX = LIGHT_DIR_SCREEN.x();
+        double lightY = LIGHT_DIR_SCREEN.y();
 
-        gc.setFill(new RadialGradient(
-                0, 0,
-                x - r * 0.35, y - r * 0.40,
-                r * 1.45,
-                false,
-                CycleMethod.NO_CYCLE,
-                new Stop(0.0, Color.WHITE),
-                new Stop(0.45, midColor),
-                new Stop(1.0, edgeColor)
-        ));
-        gc.fillOval(x - r, y - r, r * 2, r * 2);
+        if (showBallShading) {
+            double shadowOffsetX = -lightX * r * 0.24;
+            double shadowOffsetY = -lightY * r * 0.24;
+            gc.setFill(new RadialGradient(
+                    0, 0,
+                    x + shadowOffsetX, y + shadowOffsetY + r * 0.72,
+                    r * 1.65,
+                    false, CycleMethod.NO_CYCLE,
+                    new Stop(0.0, Color.color(0, 0, 0, 0.34)),
+                    new Stop(1.0, Color.TRANSPARENT)
+            ));
+            gc.fillOval(x - r * 1.55, y + r * 0.1, r * 3.1, r * 1.35);
 
-        gc.setFill(new RadialGradient(
-                0, 0,
-                x + r * 0.35, y + r * 0.40,
-                r * 1.25,
-                false, CycleMethod.NO_CYCLE,
-                new Stop(0.0, Color.TRANSPARENT),
-                new Stop(1.0, Color.color(0, 0, 0, 0.25))
-        ));
-        gc.fillOval(x - r, y - r, r * 2, r * 2);
+            gc.setFill(new RadialGradient(
+                    0, 0,
+                    x + lightX * r * 0.48, y + lightY * r * 0.48,
+                    r * (1.22 + (1.0 - AMBIENT) * 0.36),
+                    false,
+                    CycleMethod.NO_CYCLE,
+                    new Stop(0.0, Color.WHITE.interpolate(midColor, 1.0 - DIFFUSE)),
+                    new Stop(0.62, midColor),
+                    new Stop(1.0, edgeColor.interpolate(Color.BLACK, 1.0 - AMBIENT))
+            ));
+            gc.fillOval(x - r, y - r, r * 2, r * 2);
+
+            gc.setFill(new RadialGradient(
+                    0, 0,
+                    x - lightX * r * 0.58, y - lightY * r * 0.58,
+                    r * 1.22,
+                    false, CycleMethod.NO_CYCLE,
+                    new Stop(0.0, Color.TRANSPARENT),
+                    new Stop(1.0, Color.color(0, 0, 0, 0.24 + 0.11 * (1.0 - AMBIENT)))
+            ));
+            gc.fillOval(x - r, y - r, r * 2, r * 2);
+        } else {
+            gc.setFill(midColor);
+            gc.fillOval(x - r, y - r, r * 2, r * 2);
+        }
 
         if (index > 0) {
             gc.setFill(Color.color(0.97, 0.97, 0.97, 0.92));
@@ -730,11 +790,18 @@ public final class BilliardApp extends Application {
         gc.setLineWidth(1.0);
         gc.strokeOval(x - r, y - r, r * 2, r * 2);
 
-        gc.setFill(Color.color(1, 1, 1, 0.75));
-        gc.fillOval(x - r * 0.45, y - r * 0.45, r * 0.45, r * 0.35);
-
-        gc.setFill(Color.color(1, 1, 1, 0.24));
-        gc.fillOval(x - r * 0.15, y - r * 0.65, r * 0.25, r * 0.14);
+        if (showBallShading) {
+            double specX = x + lightX * r * 0.45;
+            double specY = y + lightY * r * 0.45;
+            double specR = r * SPECULAR_SIZE_RATIO;
+            gc.setFill(new RadialGradient(
+                    0, 0, specX, specY, specR, false, CycleMethod.NO_CYCLE,
+                    new Stop(0.0, Color.color(1, 1, 1, 0.98 * SPECULAR)),
+                    new Stop(0.45, Color.color(1, 1, 1, 0.52 * SPECULAR)),
+                    new Stop(1.0, Color.TRANSPARENT)
+            ));
+            gc.fillOval(specX - specR, specY - specR, specR * 2, specR * 2);
+        }
     }
 
     private void drawBloomPass(GraphicsContext gc, double t) {
@@ -785,12 +852,14 @@ public final class BilliardApp extends Application {
         String cueMode = world.cueBallMotionMode() == PhysicsWorld.MotionMode.SLIDING ? "SLIDE" : "ROLL";
         double muR = world.rollingFriction();
         double rollAccel = world.rollingDecelMps2();
+        double wMag = world.ballAngularVelocity(0).length();
+        double wz = world.ballAngularVelocity(0).z();
 
         gc.setFill(Color.color(0.02, 0.06, 0.08, 0.73));
-        gc.fillRoundRect(14, 14, 320, 132, 14, 14);
+        gc.fillRoundRect(14, 14, 320, 152, 14, 14);
         gc.setStroke(Color.color(0.64, 0.86, 0.78, 0.35));
         gc.setLineWidth(1.2);
-        gc.strokeRoundRect(14, 14, 320, 132, 14, 14);
+        gc.strokeRoundRect(14, 14, 320, 152, 14, 14);
 
         gc.setFill(Color.web("#d7efe6"));
         gc.setFont(Font.font("Georgia", FontWeight.BOLD, 15));
@@ -803,21 +872,22 @@ public final class BilliardApp extends Application {
         gc.fillText(String.format("mu_r %.3f   a_roll %.3f m/s^2", muR, rollAccel), 26, 96);
         gc.fillText(String.format("mu_rail %.3f   e_rail %.2f", PhysicsConfig.MU_RAIL, PhysicsConfig.RAIL_RESTITUTION), 26, 116);
         gc.fillText(String.format("tip (%.2f, %.2f)", tipOffsetNorm.x(), tipOffsetNorm.y()), 26, 136);
+        gc.fillText(String.format("|w| %.2f   wz %.2f", wMag, wz), 26, 156);
 
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         gc.setFill(Color.color(0.01, 0.03, 0.04, 0.78));
-        gc.fillRoundRect(14, 164, 302, 34, 10, 10);
+        gc.fillRoundRect(14, 184, 302, 34, 10, 10);
         gc.setFill(new LinearGradient(
                 20, 0, 300, 0, false, CycleMethod.NO_CYCLE,
                 new Stop(0.0, Color.web("#f1cc58")),
                 new Stop(0.7, Color.web("#ff9444")),
                 new Stop(1.0, Color.web("#ff5e45"))
         ));
-        gc.fillRoundRect(20, 170, 290 * chargeRatio, 22, 8, 8);
+        gc.fillRoundRect(20, 190, 290 * chargeRatio, 22, 8, 8);
 
         gc.setFill(Color.web("#f7f7f7"));
         gc.setFont(Font.font("Georgia", FontWeight.BOLD, 13));
-        gc.fillText(String.format("SHOT POWER %d%%", (int) Math.round(chargeRatio * 100)), 24, 186);
+        gc.fillText(String.format("SHOT POWER %d%%", (int) Math.round(chargeRatio * 100)), 24, 206);
 
         gc.setFill(new RadialGradient(
                 0, 0, WINDOW_WIDTH * 0.5, WINDOW_HEIGHT * 0.48, WINDOW_WIDTH * 0.68,
@@ -884,5 +954,20 @@ public final class BilliardApp extends Application {
             this.objectBallDirection = objectBallDirection;
             this.cueDeflectDirection = cueDeflectDirection;
         }
+    }
+
+    private static Vector3 unit(double x, double y, double z) {
+        double len = Math.sqrt((x * x) + (y * y) + (z * z));
+        if (len <= 1e-12) {
+            return Vector3.ZERO;
+        }
+        return new Vector3(x / len, y / len, z / len);
+    }
+
+    private static double clamp01(double value) {
+        if (value < 0.0) {
+            return 0.0;
+        }
+        return Math.min(1.0, value);
     }
 }
