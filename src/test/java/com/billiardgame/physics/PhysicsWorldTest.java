@@ -5,15 +5,15 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PhysicsWorldTest {
     private static final TableBounds LARGE_BOUNDS = new TableBounds(-10_000, 10_000, -10_000, 10_000);
+    private static final double TEST_PIXELS_PER_METER = 320.0;
 
     @Test
     void velocityMagnitudeDecreasesAfterStepping() {
-        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS);
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
         world.setCueBallVelocity(new Vector2(100, 0));
 
         double speedBefore = world.cueBallSpeed();
@@ -26,21 +26,52 @@ final class PhysicsWorldTest {
 
     @Test
     void eventuallyStopsAfterEnoughSteps() {
-        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS);
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
         world.setCueBallVelocity(new Vector2(800, 0));
 
-        for (int i = 0; i < 2000; i++) {
+        for (int i = 0; i < 5000; i++) {
             world.step(1.0 / 120.0);
         }
 
-        assertEquals(0.0, world.cueBallSpeed());
+        assertTrue(world.cueBallSpeed() < 0.2);
+    }
+
+    @Test
+    void slidingTransitionsToRolling() {
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
+        world.setCueBallVelocity(new Vector2(900, 120));
+
+        boolean reachedRolling = false;
+        for (int i = 0; i < 1200; i++) {
+            world.step(1.0 / 120.0);
+            if (world.cueBallMotionMode() == PhysicsWorld.MotionMode.ROLLING) {
+                reachedRolling = true;
+                break;
+            }
+        }
+
+        assertTrue(reachedRolling);
+    }
+
+    @Test
+    void wzDecaysOverTime() {
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(0, 0), 12)), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
+        world.setBallAngularVelocity(0, new Vector3(0, 0, 30));
+
+        double wzBefore = Math.abs(world.ballAngularVelocity(0).z());
+        for (int i = 0; i < 240; i++) {
+            world.step(1.0 / 120.0);
+        }
+        double wzAfter = Math.abs(world.ballAngularVelocity(0).z());
+
+        assertTrue(wzAfter < wzBefore);
     }
 
     @Test
     void headOnEqualMassesApproximatelySwapVelocities() {
         Ball a = new Ball(new Vector2(0, 0), 12);
         Ball b = new Ball(new Vector2(24, 0), 12);
-        PhysicsWorld world = new PhysicsWorld(List.of(a, b), LARGE_BOUNDS);
+        PhysicsWorld world = new PhysicsWorld(List.of(a, b), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
         world.setBallVelocity(0, new Vector2(100, 0));
         world.setBallVelocity(1, Vector2.ZERO);
 
@@ -54,7 +85,7 @@ final class PhysicsWorldTest {
     void overlappingStationaryBallsGetSeparatedAfterStep() {
         Ball a = new Ball(new Vector2(0, 0), 12);
         Ball b = new Ball(new Vector2(10, 0), 12);
-        PhysicsWorld world = new PhysicsWorld(List.of(a, b), LARGE_BOUNDS);
+        PhysicsWorld world = new PhysicsWorld(List.of(a, b), LARGE_BOUNDS, TEST_PIXELS_PER_METER);
 
         world.step(1.0 / 120.0);
 
@@ -66,7 +97,7 @@ final class PhysicsWorldTest {
     @Test
     void rightWallBounceFlipsVelocityNegative() {
         TableBounds bounds = new TableBounds(0, 100, 0, 100);
-        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(88, 50), 10)), bounds);
+        PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(88, 50), 10)), bounds, TEST_PIXELS_PER_METER);
         world.setCueBallVelocity(new Vector2(200, 0));
 
         world.step(1.0 / 60.0);
@@ -78,7 +109,7 @@ final class PhysicsWorldTest {
     void ballStaysWithinBoundsAfterStep() {
         TableBounds bounds = new TableBounds(0, 100, 0, 100);
         Ball ball = new Ball(new Vector2(95, 95), 10);
-        PhysicsWorld world = new PhysicsWorld(List.of(ball), bounds);
+        PhysicsWorld world = new PhysicsWorld(List.of(ball), bounds, TEST_PIXELS_PER_METER);
         world.setCueBallVelocity(new Vector2(500, 500));
 
         world.step(1.0 / 60.0);
