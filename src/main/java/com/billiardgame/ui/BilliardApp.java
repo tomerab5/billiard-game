@@ -715,10 +715,10 @@ public final class BilliardApp extends Application {
         double rollAccel = world.rollingDecelMps2();
 
         gc.setFill(Color.color(0.02, 0.06, 0.08, 0.73));
-        gc.fillRoundRect(14, 14, 320, 110, 14, 14);
+        gc.fillRoundRect(14, 14, 320, 132, 14, 14);
         gc.setStroke(Color.color(0.64, 0.86, 0.78, 0.35));
         gc.setLineWidth(1.2);
-        gc.strokeRoundRect(14, 14, 320, 110, 14, 14);
+        gc.strokeRoundRect(14, 14, 320, 132, 14, 14);
 
         gc.setFill(Color.web("#d7efe6"));
         gc.setFont(Font.font("Georgia", FontWeight.BOLD, 15));
@@ -729,21 +729,22 @@ public final class BilliardApp extends Application {
         gc.fillText("State " + simulatorState, 26, 56);
         gc.fillText(String.format("Cue %s  %.1f px/s", cueMode, cueSpeed), 26, 76);
         gc.fillText(String.format("mu_r %.3f   a_roll %.3f m/s^2", muR, rollAccel), 26, 96);
+        gc.fillText(String.format("mu_rail %.3f   e_rail %.2f", PhysicsConfig.MU_RAIL, PhysicsConfig.RAIL_RESTITUTION), 26, 116);
 
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         gc.setFill(Color.color(0.01, 0.03, 0.04, 0.78));
-        gc.fillRoundRect(14, 128, 302, 34, 10, 10);
+        gc.fillRoundRect(14, 146, 302, 34, 10, 10);
         gc.setFill(new LinearGradient(
                 20, 0, 300, 0, false, CycleMethod.NO_CYCLE,
                 new Stop(0.0, Color.web("#f1cc58")),
                 new Stop(0.7, Color.web("#ff9444")),
                 new Stop(1.0, Color.web("#ff5e45"))
         ));
-        gc.fillRoundRect(20, 134, 290 * chargeRatio, 22, 8, 8);
+        gc.fillRoundRect(20, 152, 290 * chargeRatio, 22, 8, 8);
 
         gc.setFill(Color.web("#f7f7f7"));
         gc.setFont(Font.font("Georgia", FontWeight.BOLD, 13));
-        gc.fillText(String.format("SHOT POWER %d%%", (int) Math.round(chargeRatio * 100)), 24, 150);
+        gc.fillText(String.format("SHOT POWER %d%%", (int) Math.round(chargeRatio * 100)), 24, 168);
 
         gc.setFill(new RadialGradient(
                 0, 0, WINDOW_WIDTH * 0.5, WINDOW_HEIGHT * 0.48, WINDOW_WIDTH * 0.68,

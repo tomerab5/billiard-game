@@ -19,6 +19,7 @@ public final class PhysicsConfig {
     public static final double MU_BALL_BALL = 0.06;
     public static final double BALL_COLLISION_TANGENTIAL_EPS_M_PER_S = 1e-4;
     public static final double RAIL_RESTITUTION = 0.92;
+    public static final double MU_RAIL = 0.14;
 
     public static final double TABLE_WIDTH_M = 2.54;
     public static final double TABLE_HEIGHT_M = 1.27;

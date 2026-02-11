@@ -129,11 +129,14 @@ final class PhysicsWorldTest {
     void rightWallBounceFlipsVelocityNegative() {
         TableBounds bounds = new TableBounds(0, 100, 0, 100);
         PhysicsWorld world = new PhysicsWorld(List.of(new Ball(new Vector2(88, 50), 10)), bounds, TEST_PIXELS_PER_METER);
-        world.setCueBallVelocity(new Vector2(200, 0));
+        double incoming = 200.0;
+        world.setCueBallVelocity(new Vector2(incoming, 0));
 
         world.step(1.0 / 60.0);
 
-        assertTrue(world.ballVelocity(0).x() < 0);
+        double outgoing = world.ballVelocity(0).x();
+        assertTrue(outgoing < 0);
+        assertTrue(Math.abs(outgoing) < incoming * PhysicsConfig.RAIL_RESTITUTION);
     }
 
     @Test
@@ -150,5 +153,23 @@ final class PhysicsWorldTest {
         assertTrue(stepped.position().x() + stepped.radius() <= bounds.right());
         assertTrue(stepped.position().y() - stepped.radius() >= bounds.top());
         assertTrue(stepped.position().y() + stepped.radius() <= bounds.bottom());
+    }
+
+    @Test
+    void railHitWithSideSpinChangesOutgoingVy() {
+        TableBounds bounds = new TableBounds(0, 100, 0, 100);
+        PhysicsWorld noSpin = new PhysicsWorld(List.of(new Ball(new Vector2(88, 50), 10)), bounds, TEST_PIXELS_PER_METER);
+        PhysicsWorld sideSpin = new PhysicsWorld(List.of(new Ball(new Vector2(88, 50), 10)), bounds, TEST_PIXELS_PER_METER);
+
+        noSpin.setCueBallVelocity(new Vector2(200, 0));
+        sideSpin.setCueBallVelocity(new Vector2(200, 0));
+        sideSpin.setBallAngularVelocity(0, new Vector3(0, 0, 40));
+
+        noSpin.step(1.0 / 60.0);
+        sideSpin.step(1.0 / 60.0);
+
+        double vyNoSpin = noSpin.ballVelocity(0).y();
+        double vyWithSpin = sideSpin.ballVelocity(0).y();
+        assertTrue(Math.abs(vyWithSpin - vyNoSpin) > 0.01);
     }
 }

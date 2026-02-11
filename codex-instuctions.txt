@@ -1,30 +1,24 @@
-Upgrade ball–ball collisions to include spin + friction impulse (Coulomb).
+Upgrade rail collisions to impulse-based response including tangential friction and spin transfer.
 Requirements:
 
-In physics, represent each ball with linear velocity v (2D) and angular velocity w (3D). If w already exists, use it.
+Replace simple “flip vx/vy” rail handling with a contact impulse model:
 
-For a ball–ball collision, compute contact normal n (in table plane), contact offsets r1 = R*n, r2 = -R*n (3D vectors with z=0).
+Use wall normal n and tangent t (both in table plane).
 
-Compute relative velocity at contact: vRel = (v2 + w2×r2) - (v1 + w1×r1).
+Compute contact point relative vector r = -R*k (bottom contact) OR r = -R*n (if you modeled wall contact differently). Choose one consistent approach and document it.
 
-Compute normal impulse Jn using coefficient of restitution e_bb (keep current value).
+Compute contact relative velocity vContact = v + w×r.
 
-Compute tangential impulse Jt that opposes tangential relative motion, clamped by |Jt| <= mu_bb * Jn.
+Compute normal impulse to satisfy restitution e_rail.
 
-If tangential relative speed is near zero, skip Jt.
+Compute tangential impulse along t to oppose slip, clamped by |Jt| <= mu_rail * Jn.
 
-Apply impulses to both balls:
+Apply to v and w using the same impulse formulas as ball–ball.
 
-v += ± J/m
+Add tests:
 
-w += I^{-1} (r × (±J)) with I = 2/5 m R^2
+Ball hits vertical rail: vx reverses sign and magnitude reduced by restitution.
 
-Keep determinism and keep JavaFX out of physics.
+With side spin (wz), after rail hit the outgoing vy differs from no-spin case (assert difference).
 
-Add/extend tests:
-
-Head-on equal-mass: velocities approximately swap (within tolerance).
-
-With initial side spin on cue ball, after collision: target ball gets some sideways component OR cue ball loses some spin (assert non-zero transfer).
-
-Add a debug mode key T: toggles showing each ball’s wz (or total |w|) as text near the ball.
+Add debug overlay values: show mu_rail, e_rail.

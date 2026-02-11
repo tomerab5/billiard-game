@@ -158,36 +158,64 @@ public final class PhysicsWorld {
         double r = ballBody.radius;
         double x = ballBody.position.x();
         double y = ballBody.position.y();
-        double vx = ballBody.velocity.x();
-        double vy = ballBody.velocity.y();
 
         if (x + r > bounds.right()) {
             x = bounds.right() - r;
-            if (vx > 0) {
-                vx = -vx * PhysicsConfig.RAIL_RESTITUTION;
-            }
+            ballBody.position = new Vector2(x, y);
+            applyRailContactImpulse(ballBody, new Vector2(-1, 0));
         }
         if (x - r < bounds.left()) {
             x = bounds.left() + r;
-            if (vx < 0) {
-                vx = -vx * PhysicsConfig.RAIL_RESTITUTION;
-            }
+            ballBody.position = new Vector2(x, y);
+            applyRailContactImpulse(ballBody, new Vector2(1, 0));
         }
         if (y + r > bounds.bottom()) {
             y = bounds.bottom() - r;
-            if (vy > 0) {
-                vy = -vy * PhysicsConfig.RAIL_RESTITUTION;
-            }
+            ballBody.position = new Vector2(x, y);
+            applyRailContactImpulse(ballBody, new Vector2(0, -1));
         }
         if (y - r < bounds.top()) {
             y = bounds.top() + r;
-            if (vy < 0) {
-                vy = -vy * PhysicsConfig.RAIL_RESTITUTION;
-            }
+            ballBody.position = new Vector2(x, y);
+            applyRailContactImpulse(ballBody, new Vector2(0, 1));
         }
 
         ballBody.position = new Vector2(x, y);
-        ballBody.velocity = new Vector2(vx, vy);
+    }
+
+    private void applyRailContactImpulse(BallBody body, Vector2 normal) {
+        Vector2 n = normal.normalized();
+        Vector2 t = new Vector2(-n.y(), n.x());
+
+        // Wall-contact model: contact point from center is -R*n.
+        Vector3 r = new Vector3(-n.x() * body.radius, -n.y() * body.radius, 0.0);
+        Vector3 vContact3 = toVec3(body.velocity).add(cross(body.angularVelocity, r));
+        Vector2 vContact = new Vector2(vContact3.x(), vContact3.y());
+
+        double vn = dot(vContact, n);
+        if (vn >= 0.0) {
+            return;
+        }
+
+        double invMass = 1.0 / body.mass;
+        double invI = 1.0 / inertia(body.mass, body.radius);
+        Vector3 n3 = toVec3(n);
+        Vector3 t3 = toVec3(t);
+
+        double kN = invMass + cross(r, n3).lengthSq() * invI;
+        double jn = -(1.0 + PhysicsConfig.RAIL_RESTITUTION) * vn / kN;
+
+        double vt = dot(vContact, t);
+        double jt = 0.0;
+        if (Math.abs(vt) > PhysicsConfig.BALL_COLLISION_TANGENTIAL_EPS_M_PER_S) {
+            double kT = invMass + cross(r, t3).lengthSq() * invI;
+            double jtUnclamped = -vt / kT;
+            double jtMax = PhysicsConfig.MU_RAIL * jn;
+            jt = Math.max(-jtMax, Math.min(jtMax, jtUnclamped));
+        }
+
+        Vector3 impulse = n3.mul(jn).add(t3.mul(jt));
+        applyImpulse(body, impulse, r);
     }
 
     private void resolveBallCollisions() {
