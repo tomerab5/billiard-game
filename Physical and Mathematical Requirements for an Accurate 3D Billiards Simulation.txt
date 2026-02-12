@@ -1,0 +1,518 @@
+# Physical and Mathematical Requirements for an Accurate 3D Billiards Simulation
+
+## Executive summary
+
+Accurate 3D billiards/pool simulation is a coupled **rigid-body dynamics + intermittent contact/impact** problem with strong dependence on (i) frictional transitions (sliding→rolling), (ii) short-duration impulses (ball–ball and ball–cushion), and (iii) geometry-driven capture/rejection in pockets. Regulation equipment specifications constrain key geometric parameters—ball size/mass, cushion nose height, pocket mouth/shelf/cut angles—while experimental work provides realistic ranges for friction and restitution that dominate macroscopic behavior (stop distance/time, rebound angles, spin survival). citeturn30view0turn31view0turn25view0turn13view4turn20view5
+
+A robust simulation needs **two layers of physics**:
+
+1. **Between impacts** (continuous dynamics): Newton–Euler motion with a **state-dependent contact model** at the cloth interface (sliding friction, rolling resistance, and spin decay). The key transitions can be modeled analytically (Coulomb sliding) and matched to measured friction ranges for billiards cloth. citeturn20view5turn18view0
+
+2. **At impacts** (discontinuous dynamics): an impulse-based collision response (with Coulomb friction and rotational coupling) is typically sufficient for real-time; a compliant (Hertz/Mindlin-type) contact model can be used when you want contact duration, peak forces, and speed-dependent restitution. Canonical viscoelastic and frictional impact literature supplies implementable force laws and restitution dependence on speed. citeturn9view4turn9view5turn3search1turn3search5turn29search10turn34view9
+
+The largest practical sources of visible error in game-like simulations are:
+
+- **pocket geometry not matching spec** (changes acceptance/rejection dramatically), citeturn25view0turn31view0  
+- **wrong rolling resistance** (stop distances and “table speed” feel wrong), citeturn25view0turn31view0turn6search5  
+- **missing tangential impulses** during collisions (spin/throw/deflection wrong), citeturn20view5turn3search1  
+- **numerical tunneling or energy gain** from unstable time stepping, citeturn9view4turn9view5turn8search12  
+- **spin decay modeling** (especially sidespin) inconsistent with measured angular deceleration. citeturn18view0  
+
+## Modeling scope and assumptions
+
+This report treats “accurate simulation” as matching: (a) trajectories and stopping distances on cloth, (b) post-collision linear and angular velocities for ball–ball and ball–cushion impacts, and (c) pocket acceptance regions as a function of approach speed/spin/angle. Table model is unspecified, so defaults assume a regulation-style rectangular pool table compliant with entity["organization","World Pool-Billiard Association","pool governing body"] recommended equipment specifications, with alternative values from entity["organization","Billiard Congress of America","equipment specifications"] where relevant. citeturn30view0turn31view0turn25view0
+
+Variants are included as parameterizations:
+
+- Snooker: ball diameter 52.5 mm (tight tolerance), and pocket openings specified by templates rather than explicit dimensions in the published rulebook. citeturn32view0  
+- Carom: no pockets; specified playing surface and cushion height are defined in entity["organization","Union Mondiale de Billard","carom governing body"] rules. citeturn33view0  
+
+Coordinate conventions used throughout:
+
+- World frame: table bed is plane \(z=0\), gravity \( \mathbf{g} = (0,0,-g) \).  
+- Each ball \(i\): center position \( \mathbf{x}_i \), linear velocity \( \mathbf{v}_i \), angular velocity \( \boldsymbol{\omega}_i \), mass \(m_i\), inertia tensor \( \mathbf{I}_i = I_i \mathbf{1} \) (spherically symmetric). citeturn9view4turn8search23  
+
+## Continuous dynamics on cloth: linear motion, angular motion, friction, and spin decay
+
+### Newton–Euler equations ready to implement
+
+For each ball \(i\) (full 3D):
+
+\[
+\dot{\mathbf{x}}_i = \mathbf{v}_i,\qquad 
+m_i \dot{\mathbf{v}}_i = \mathbf{F}_{\text{ext}} + \mathbf{F}_{\text{cloth}} + \mathbf{F}_{\text{air}}
+\]
+
+\[
+\mathbf{I}_i \, \dot{\boldsymbol{\omega}}_i = \boldsymbol{\tau}_{\text{ext}} + \boldsymbol{\tau}_{\text{cloth}}
+\]
+
+To update orientation, use quaternion \(q_i\) with:
+
+\[
+\dot{q}_i = \frac12\, q_i \otimes (0,\boldsymbol{\omega}_i)
+\]
+
+This is the standard rigid-body formulation used in impulse/constraint methods; see impulse-based and time-stepping treatments for contact/friction. citeturn9view4turn9view5turn8search12
+
+### Cloth contact kinematics: slip velocity at the contact point
+
+Let \( \mathbf{n}=(0,0,1) \) be the table normal and the contact point in body coordinates be \( \mathbf{r}=-R\mathbf{n} \). The instantaneous velocity of the contact point is:
+
+\[
+\mathbf{v}_c = \mathbf{v} + \boldsymbol{\omega}\times\mathbf{r}
+\]
+
+The **slip** (relative tangential velocity) is the projection to the plane:
+
+\[
+\mathbf{u} = \mathbf{v}_c - (\mathbf{v}_c\cdot \mathbf{n})\mathbf{n}
+\]
+
+Pure rolling (no slip) means \( \mathbf{u}=\mathbf{0} \). This is the key state variable for transitioning between sliding and rolling. citeturn20view5turn9view4
+
+### Sliding friction model (dominant immediately after cueing and after many impacts)
+
+A practical Coulomb sliding law:
+
+\[
+\mathbf{F}_{\text{slide}} = -\mu_s N\,\frac{\mathbf{u}}{\|\mathbf{u}\|+\varepsilon_u}
+\]
+
+where \(N \approx m g\) when the ball remains on the bed, and \(\varepsilon_u\) is a small regularizer. For snooker, experimentally-derived sliding friction between balls and table was reported in the range **0.178–0.245**, with **0.21** used as an average in simulations. citeturn20view5
+
+This produces:
+
+\[
+\dot{\mathbf{v}}_\parallel = -\mu_s g\,\frac{\mathbf{u}}{\|\mathbf{u}\|+\varepsilon_u},\qquad
+\dot{\boldsymbol{\omega}} = \mathbf{I}^{-1}(\mathbf{r}\times \mathbf{F}_{\text{slide}})
+\]
+
+with \(\mathbf{r}=-R\mathbf{n}\). The coupling is the mechanism through which a sliding ball “spins up” into rolling (topspin builds from friction). citeturn20view5turn9view4
+
+### Closed-form sliding→rolling transition (useful for validation and as a fast integrator)
+
+For 1D motion along direction \(\hat{\mathbf{t}}\) (or for each tangential component independently), define scalar slip:
+
+\[
+u = v - R\omega_t
+\]
+
+For a solid sphere \(I=\frac{2}{5}mR^2\) on a plane under kinetic friction \(\mu_s\), the slip decreases linearly:
+
+\[
+\dot{u} = -\frac{7}{2}\mu_s g\,\text{sign}(u)
+\]
+
+so time-to-roll is:
+
+\[
+t_{\text{roll}} = \frac{2}{7}\frac{|u_0|}{\mu_s g}
+\]
+
+At \(t_{\text{roll}}\), enforce \(u=0\) (project to rolling) and continue in rolling resistance mode. This classical result is consistent with rigid-body + Coulomb friction derivations used in billiards impact modeling. citeturn9view4turn20view5
+
+### Rolling resistance (dominant late in motion; sets stop distance/time)
+
+Billiards cloth exhibits measurable deceleration in the rolling regime that is well approximated as speed-independent over relevant low speeds; reported rolling deceleration values around **0.124–0.126 m/s²** correspond to an effective rolling resistance coefficient \(\mu_r \approx 0.0127–0.0129\) via \(a=\mu_r g\). citeturn6search5
+
+A simple and implementable model:
+
+\[
+\mathbf{F}_{\text{roll}} = -\mu_r N\,\frac{\mathbf{v}_\parallel}{\|\mathbf{v}_\parallel\|+\varepsilon_v}
+\]
+
+This gives constant deceleration \(a=\mu_r g\) and thus:
+
+\[
+t_{\text{stop}} = \frac{v_0}{\mu_r g},\qquad d_{\text{stop}}=\frac{v_0^2}{2\mu_r g}
+\]
+
+These formulas are directly useful to match the “table speed” tests specified by WPA/BCA (ball shot with a firm stroke travels 4–4½ table lengths). citeturn25view0turn31view0turn6search5
+
+**Illustrative speed–time profile (piecewise linear)** using \(\mu_s=0.21\) and \(\mu_r=0.013\): the first ~0.1–0.4 s is dominated by sliding deceleration \(\mu_s g\), followed by a long rolling tail with deceleration \(\mu_r g\). The breakpoint timing is set by \(t_{\text{roll}}\). citeturn20view5turn6search5
+
+### Sidespin decay, precession, and “gyroscopic” effects
+
+Because a sphere’s inertia is isotropic, there is no asymmetric rigid-body gyroscopic coupling (unlike a spinning top), but **precession of the spin axis** still occurs whenever the cloth/contact torque is not parallel to \(\boldsymbol{\omega}\):
+
+\[
+\dot{\boldsymbol{\omega}} = \mathbf{I}^{-1}\boldsymbol{\tau}
+\]
+
+A torque component perpendicular to \(\boldsymbol{\omega}\) rotates the spin axis; the instantaneous precession rate magnitude is approximately:
+
+\[
+\Omega_p \approx \frac{\|\boldsymbol{\tau}_\perp\|}{I\|\boldsymbol{\omega}\|}
+\]
+
+Empirically, table resistance to **sidespin** (spin about vertical) has been measured as an angular deceleration of about **22 rad/s²** in high-speed tracking experiments, giving a practical decay law:
+
+\[
+\dot{\omega}_z = -\alpha_z\,\text{sign}(\omega_z),\ \ \alpha_z \approx 22\ \text{rad/s}^2
+\]
+
+for moderate \(|\omega_z|\), with optional smoothing near zero to avoid jitter. citeturn18view0turn17view0
+
+### Air drag (usually secondary, but not always negligible at break speeds)
+
+Quadratic drag:
+
+\[
+\mathbf{F}_{\text{air}} = -\tfrac12\rho C_D A \|\mathbf{v}\|\,\mathbf{v}
+\]
+
+with \(A=\pi R^2\). For a sphere, NASA provides background on drag behavior and coefficient variation with Reynolds number. citeturn7search16
+
+At typical rolling speeds (~0.5–2 m/s), cloth losses dominate. At extreme break speeds (order 10 m/s), air drag can become comparable to rolling resistance in magnitude because it scales as \(v^2\) while rolling loss is approximately constant in the simple model. citeturn6search5turn7search16turn28search3
+
+## Ball–ball collision physics: elastic theory, oblique impacts, rotational coupling, and impulse algorithms
+
+image_group{"layout":"carousel","aspect_ratio":"16:9","query":["Hertzian contact between two spheres diagram","oblique collision two spheres friction impulse diagram","billiard ball collision spin transfer diagram","Cattaneo Mindlin tangential contact schematic"],"num_per_query":1}
+
+### Geometry and kinematics at contact
+
+For two balls \(A,B\) of radii \(R_A,R_B\), define:
+
+- Line-of-centers unit normal \( \mathbf{n} = \frac{\mathbf{x}_B-\mathbf{x}_A}{\|\mathbf{x}_B-\mathbf{x}_A\|} \)
+- Contact points relative to centers: \( \mathbf{r}_A = +R_A\mathbf{n},\ \mathbf{r}_B = -R_B\mathbf{n} \)
+
+Relative velocity at the contact point:
+
+\[
+\mathbf{v}_{rel} = (\mathbf{v}_A + \boldsymbol{\omega}_A\times \mathbf{r}_A) - (\mathbf{v}_B + \boldsymbol{\omega}_B\times \mathbf{r}_B)
+\]
+
+Split into normal and tangential components:
+
+\[
+v_n = \mathbf{v}_{rel}\cdot \mathbf{n},\qquad \mathbf{v}_t = \mathbf{v}_{rel} - v_n \mathbf{n}
+\]
+
+This decomposition underlies both impulse and compliant contact formulations. citeturn9view4turn3search1
+
+### Impulse-based collision response with friction (recommended for real-time engines)
+
+**Normal impulse** (Newton restitution law):
+
+\[
+J_n = - (1+e)\,\frac{v_n}{\frac{1}{m_A}+\frac{1}{m_B}}
+\quad\text{for } v_n<0
+\]
+
+For spheres, rotation does not directly enter the normal effective mass because \(\mathbf{r}\parallel\mathbf{n}\Rightarrow (\mathbf{r}\times\mathbf{n})=\mathbf{0}\). citeturn9view4turn8search0
+
+**Tangential impulse**: choose a tangential unit direction
+\[
+\mathbf{t} = \frac{\mathbf{v}_t}{\|\mathbf{v}_t\|+\varepsilon_t}
+\]
+
+Define tangential effective mass (including rotation):
+
+\[
+\frac{1}{m_{eff,t}}=
+\frac{1}{m_A}+\frac{1}{m_B}
++\mathbf{t}\cdot\left[
+\mathbf{I}_A^{-1}(\mathbf{r}_A\times\mathbf{t})\times\mathbf{r}_A
++
+\mathbf{I}_B^{-1}(\mathbf{r}_B\times\mathbf{t})\times\mathbf{r}_B
+\right]
+\]
+
+For equal solid spheres \(I=\frac{2}{5}mR^2\), this reduces to \(m_{eff,t}=m/7\), a useful check for implementation. citeturn9view4turn20view5
+
+The “sticking” impulse to cancel tangential slip would be:
+
+\[
+J_t^\* = -\frac{\mathbf{v}_t\cdot\mathbf{t}}{1/m_{eff,t}}
+\]
+
+Clamp by Coulomb friction:
+
+\[
+J_t = \text{clamp}(J_t^\*,\ -\mu_{bb}|J_n|,\ +\mu_{bb}|J_n|)
+\]
+
+Total impulse: \( \mathbf{J}=J_n\mathbf{n}+J_t\mathbf{t} \). Update:
+
+\[
+\mathbf{v}_A^+ = \mathbf{v}_A^- + \frac{\mathbf{J}}{m_A},\quad
+\boldsymbol{\omega}_A^+ = \boldsymbol{\omega}_A^- + \mathbf{I}_A^{-1}(\mathbf{r}_A\times\mathbf{J})
+\]
+
+\[
+\mathbf{v}_B^+ = \mathbf{v}_B^- - \frac{\mathbf{J}}{m_B},\quad
+\boldsymbol{\omega}_B^+ = \boldsymbol{\omega}_B^- - \mathbf{I}_B^{-1}(\mathbf{r}_B\times\mathbf{J})
+\]
+
+This is a standard rigid-body impulse approach used in physically-based animation/graphics and is well suited to many-collision billiards. citeturn9view4turn8search3turn8search0turn9view5
+
+### Realistic parameters for ball–ball impacts: restitution, friction, and energy loss
+
+In snooker-ball collision modeling on a rough plane, ball–table sliding friction \( \mu_s \) was reported as 0.178–0.245 (avg 0.21). Ball–ball friction \(\mu_{bb}\) and restitution \(e\) were calibrated by matching experiments; \(\mu_{bb}\approx 0.05\) and \(e\approx 0.89\) minimized RMS error in their dataset. citeturn20view5
+
+That same source summarizes prior literature indicating \(\mu_{bb}\) can rise substantially when balls are contaminated (e.g., chalk), with values as high as ~0.2 mentioned in the pocket-billiards literature they cite. citeturn20view5turn28search12
+
+**Energy loss**: in 1D normal impacts, the fraction of *normal relative kinetic energy* lost is:
+
+\[
+\Delta E/E = 1-e^2
+\]
+
+So \(e=0.89\Rightarrow 1-e^2\approx 0.21\) (≈21% loss in normal relative motion), while \(e=0.95\Rightarrow\) ≈9.8%. This is only the normal-mode loss; tangential friction can dissipate additional energy by doing work during slip. citeturn20view5turn3search5
+
+### Contact mechanics option: Hertzian normal contact + tangential compliance
+
+If you need physically grounded contact patch size, peak force, and contact duration, Hertzian contact provides:
+
+\[
+F_n = \frac{4}{3}E^\*\sqrt{R_{eff}}\,\delta^{3/2}
+\]
+
+\[
+\frac{1}{E^\*}=\frac{1-\nu_A^2}{E_A}+\frac{1-\nu_B^2}{E_B},
+\qquad 
+R_{eff}=\left(\frac{1}{R_A}+\frac{1}{R_B}\right)^{-1}
+\]
+
+These relations (and associated contact radius/pressure formulas) are standard in contact mechanics. citeturn9view9turn29search17
+
+**Contact duration** for Hertzian elastic sphere–sphere contact is widely used in DEM stability analysis; a common form is:
+
+\[
+t_H \approx 2.94\left(\frac{m_{eff}^2}{R_{eff}E^{\*2} v_n}\right)^{1/5}
+\]
+
+with \(m_{eff}=(1/m_A+1/m_B)^{-1}\). citeturn29search10
+
+Using representative billiard-ball material values (phenolic resin modulus on the order of gigapascals) yields contact times on the order of **0.2–0.5 ms** for typical impact speeds (a calculation dependent on \(E^\*,v_n\), and ball sizes). citeturn29search10turn34search20turn30view0
+
+**Tangential compliance** (optional): Cattaneo–Mindlin-type tangential stiffness is often approximated as \(k_t \propto G^\* a\) (with shear modulus \(G^\*\) and contact radius \(a\)), combined with a Coulomb limit \(|F_t|\le \mu F_n\). This is the theoretical basis behind many DEM tangential “spring + Coulomb cap” laws. citeturn7search6turn29search17
+
+### Speed-dependent restitution (optional refinement)
+
+Viscoelastic impact theory predicts that restitution decreases with impact speed, often with characteristic \(v^{1/5}\) scaling for Hertzian viscoelastic spheres; coefficients can be fit to experiments or taken from viscoelastic-sphere literature. citeturn3search5turn29search17
+
+For billiards simulation, a pragmatic engineering approach is to implement \(e(v_n)\) as a fitted curve (e.g., piecewise linear in \(\log v_n\) or a viscoelastic-Hertz form) and validate against measured rebound speeds across a range of cue-ball speeds. citeturn20view5turn13view4
+
+## Ball–cushion and table-edge collisions: geometry, restitution, friction, spin transfer, and special tables
+
+### Cushion geometry constraints (pool)
+
+The cushion’s geometric placement affects (i) rebound angle, (ii) hop propensity, and (iii) “short/long” bank behavior. WPA recommends cushion nose height (nose-line to bed) of **63½% ± 1% of ball diameter**, i.e., **62½%–64½%**. For a 57.15 mm pool ball, this implies a nose height near 36.3 mm. citeturn25view0turn30view0
+
+WPA also specifies a cloth-covered cushion width (featherstrip edge to nose) between **1⅞″ and 2″** and includes a performance criterion: a ball shot from the head spot through the foot spot with a firm stroke travels **4 to 4½ table lengths without jumping**. citeturn25view0
+
+### Cushion impact physics and parameter values from experiments
+
+Ball–cushion collisions are strongly affected by friction and spin (topspin/sidespin). In a theoretical + experimental calibration study of cushion impacts (snooker context), the best-fit parameters under a “negligible cushion deformation” assumption were:
+
+- coefficient of restitution (their fitted value): **0.98**  
+- sliding coefficient of friction ball–cushion: **0.14** citeturn13view4turn13view5  
+
+They also note a practical limit: deviation for incident speeds **> 2.5 m/s** suggests the rigid-cushion assumption becomes less valid above that speed. citeturn13view4
+
+The same source reports an experimentally obtained representative restitution value around **0.818** for a rolling ball perpendicularly colliding with the cushion, emphasizing that it incorporates friction and 3D impulse effects rather than being a “pure” normal restitution. citeturn13view2
+
+### Implementable impulse model for ball–cushion (sphere vs. surface)
+
+Model the cushion face (locally) as a plane or ruled surface (depending on profile). At contact:
+
+- compute surface normal \(\mathbf{n}\) at contact point,
+- compute relative contact-point velocity \( \mathbf{v}_{rel} = \mathbf{v} + \boldsymbol{\omega}\times\mathbf{r} - \mathbf{v}_{surf}\) (usually \(\mathbf{v}_{surf}=0\)),
+- solve for normal impulse with restitution using the full effective mass:
+
+\[
+J_n = -(1+e_c)\,\frac{v_n}{\frac{1}{m} + \mathbf{n}\cdot\left[\mathbf{I}^{-1}(\mathbf{r}\times\mathbf{n})\times\mathbf{r}\right]}
+\]
+
+Unlike ball–ball, here \(\mathbf{r}\times\mathbf{n}\) is generally nonzero because the contact point is not exactly on the line joining centers (the cushion normal is not radial), so rotation affects the normal impulse. citeturn9view4turn9view5
+
+Tangential impulse is handled as in ball–ball using a Coulomb cap with \(\mu_{bw}\) (ball–cushion friction), and the updates follow the same \(\Delta \mathbf{v}, \Delta \boldsymbol{\omega}\) equations. citeturn13view5turn9view4
+
+### Table shapes and variants
+
+**Rectangular pool tables**: 6 pockets, corner/side pocket geometries differ (see pocket section). Geometry is spec-driven by mouth width, shelf depth, and cut angles. citeturn25view0turn31view0
+
+**Carom tables**: no pockets, but table size and cushion height are specified. UMB rules specify a playing surface of **2.84 m × 1.42 m** (±5 mm) and cushion height at the frontmost point of **37 mm ± 1 mm**, with tournament tables using heating to reduce humidity effects. citeturn33view0
+
+**Snooker tables**: WPBSA specifies playing area (3569 × 1778 mm) and ball diameter 52.5 mm, but pocket openings are required to conform to authorized templates (so software should treat them as a “template geometry,” not a single mouth-width number). citeturn32view0
+
+**Oval/elliptical and novelty tables**: treat as changes in boundary geometry only; collision physics is unchanged but the cushion normal field \(\mathbf{n}(\mathbf{x})\) varies continuously, so robust surface contact and reflection are more important. (No single governing spec; treat as user-provided geometry.)
+
+## Ball–pocket physics: pocket geometry, entry, rattle/rebound, and escape
+
+image_group{"layout":"carousel","aspect_ratio":"16:9","query":["pool table corner pocket geometry shelf cut angle diagram","pool table side pocket geometry cut angle diagram","billiard pocket shelf depth diagram","pool table pocket liner and facing diagram"],"num_per_query":1}
+
+### Pocket geometry parameters from WPA and BCA specifications
+
+For pool tables, WPA recommended specs define:
+
+- **Corner pocket mouth**: 4.5″–4.625″  
+- **Side pocket mouth**: 5.0″–5.125″  
+- **Vertical pocket angle (back draft)**: 12°–15°  
+- **Cut angles**: corner entrance 142° (+1), side entrance 104° (+1)  
+- **Shelf depth**: corner 1″–2¼″; side 0″–0.375″  
+- **Facings thickness**: min 1/16″, max 1/4″ (preferred max 1/8″), with facings somewhat harder than cushions citeturn25view0turn30view0  
+
+BCA (recreational/non-professional) specs are looser in mouth widths:
+
+- **Corner pocket mouth**: 4⅞″–5⅛″  
+- **Side pocket mouth**: 5⅜″–5⅝″  
+- **Vertical pocket angle**: 12°–15°  
+- **Corner shelf**: 1⅝″–1⅞″; **Side shelf**: 0″–⅜″ citeturn31view0  
+
+These dimensions heavily determine the “acceptance envelope” for cut shots—especially shelf depth and jaw angles which govern whether the ball’s center of mass can pass the pocket fall line before striking a facing. citeturn25view0turn31view0  
+
+### A physically grounded way to model pocketing vs. rebound
+
+A pocket is best treated as a **3D funnel + gravity capture** problem:
+
+1. **Geometry representation**  
+   Represent the pocket region as a set of collision surfaces:  
+   - cushion/facing “jaws” (rubber),  
+   - slate cut/bevel surfaces (hard),  
+   - liner/boot surfaces (rubber/leather/plastic per WPA),  
+   plus an “open volume” beyond the slate cut where the ball can fall. citeturn25view0  
+
+2. **Entry condition (mouth crossing)**  
+   The ball is “in the pocket mouth” when its sphere intersects the mouth plane and its center lies within the 2D mouth aperture expanded by ball radius (equivalently, use signed distance fields). WPA defines mouth measurement between cushion noses at the direction change into the pocket. citeturn25view0turn31view0  
+
+3. **Point-of-no-return criterion (shelf + gravity)**  
+   Define a “shelf plane” located at the slate vertical cut (or at an equivalent geometrically defined drop boundary). WPA defines shelf as distance from the mouth line to the vertical cut of the slate pocket cut. citeturn25view0  
+
+   A robust pocketing rule is:
+
+   - If the ball center crosses beyond the shelf boundary and the local gravitational potential gradient points “down into” the pocket cavity, then treat as **captured** unless a collision produces upward/outward velocity sufficient to reverse beyond the shelf.
+
+   Practically: once \(\mathbf{x}\) enters a “capture volume” (a region where no continuous path exists back to the table without intersecting geometry), you can switch the ball to pocket dynamics only (gravity + pocket-wall contacts) and stop simulating cloth contact.
+
+4. **Rebound and rattle (jaw impacts)**  
+   If the ball collides with jaw/facing surfaces before passing the shelf, treat it as an ordinary collision with the facing surface using appropriate restitution/friction. WPA specifies facing materials and thickness constraints (important because thick/soft facings enlarge dissipation and change rattle behavior). citeturn25view0turn30view0  
+
+5. **Escape after partial entry**  
+   Escape occurs when the ball’s center remains on the table side of the shelf boundary and its post-collision velocity has outward component large enough to clear the facing geometry. This is inherently geometry- and speed-dependent; in simulation, it “falls out” naturally if the pocket is modeled as real surfaces and you avoid premature capture triggers.
+
+### Impact forces and trajectories inside the pocket
+
+Once a ball is inside the pocket cavity:
+
+\[
+m\dot{\mathbf{v}} = m\mathbf{g} + \sum_k \mathbf{F}_{contact,k}
+\]
+
+Because pocket liners are specified to direct a ball downward when struck below the rail rim, they should be modeled as sloped/curved surfaces with significant energy loss (lower restitution, higher damping) compared to cushion rebound surfaces. citeturn25view0
+
+For practical simulation, use:
+
+- lower restitution (e.g., 0.2–0.5) and higher friction for liner/boot contacts than for cushion nose contacts, and validate by observing whether “trampoline returns” are rare, consistent with WPA’s requirement that ball returns not bounce balls back onto the table. citeturn25view0  
+
+## Parameters and defaults: realistic values, recommended table, timestep guidance, and validation experiments
+
+### Regulation-driven geometry and ball properties
+
+**Pool balls (WPA)**: cast phenolic resin, diameter 2¼″ (+0.005″) and mass 5½–6 oz (156–170 g). citeturn30view0turn30view2  
+**Snooker balls (WPBSA)**: diameter 52.5 mm ± 0.05 mm; ball set weight tolerance within 3 g (snooker). citeturn32view0  
+**Carom balls (UMB)**: diameter 61–61.5 mm (document text shows “cm,” but context is ball diameter) and mass 205–220 g; cushion height at frontmost point 37 mm ± 1 mm. citeturn33view0  
+
+**Ball inertia (homogeneous sphere default)**:
+\[
+I=\frac{2}{5}mR^2
+\]
+This is a good engineering approximation for billiard balls unless you have a measured inertia tensor. citeturn9view4turn30view0
+
+### Material properties needed for contact mechanics models
+
+If you implement Hertzian/compliant contact, you need \(E,\nu\) for balls and cushions:
+
+- Phenolic laminate datasheets report Young’s modulus on the order of **6.3 GPa** (example paper/phenolic laminate). citeturn34search20  
+- Phenolic molding compound datasheets report Poisson’s ratio in tension **~0.34–0.36**. citeturn34search34  
+- Rubber-like materials are often treated as nearly incompressible, with Poisson’s ratio frequently measured around **0.46–0.49** in elastomers (example: polychloroprene rubbers). citeturn34search6  
+- Tournament cushion manufacturers specify natural-rubber cushion hardness around **40–45 Shore A** for certain billiard cushion products, supporting the need to treat cushions as compliant and dissipative relative to balls. citeturn34search37  
+
+These values are sufficient to compute effective modulus \(E^\*\) and contact time scales for stability analysis and damping calibration. citeturn9view9turn29search10turn34search20turn34search34
+
+### Coefficients of friction and restitution: experimentally grounded defaults
+
+- Ball–table sliding friction: \(\mu_s \in [0.178,0.245]\), recommend default **0.21** (snooker; often similar order for pool cloth; calibrate per cloth). citeturn20view5  
+- Ball–ball friction: \(\mu_{bb}\approx 0.05\) (clean), can be higher with contamination; treat as tunable. citeturn20view5  
+- Ball–ball energetic restitution: calibrated around **0.89** in the cited snooker collision study; other billiards sources report higher values, so treat \(e\) as speed- and cleanliness-dependent and validate experimentally. citeturn20view5turn3search5  
+- Ball–cushion: fitted \(e\approx 0.98\), \(\mu_{bw}\approx 0.14\) under a stiff-cushion assumption, with validity limits around 2.5 m/s incident speed. citeturn13view4turn13view5  
+- Sidespin decay: angular deceleration \(\alpha_z \approx 22\ \text{rad/s}^2\). citeturn18view0  
+
+### Typical speeds and impulses for validation targets
+
+- Break shot cue ball speeds from video analysis were reported in the range **22–26 mph** (avg **24 mph**), i.e., roughly 9.8–11.6 m/s (avg ~10.7 m/s). citeturn28search3  
+- High-end cue striking speed in a snooker robotic/human comparison was reported up to about **2.75 m/s** as a “typical high-end cue velocity” in play. citeturn18view4turn19view4  
+
+A first-order cue impulse estimate (ignoring cue compliance) is:
+
+\[
+J \approx m\,\Delta v
+\]
+
+So for \(m\approx 0.17\ \text{kg}\) and \(\Delta v\approx 10\ \text{m/s}\), \(J\approx 1.7\ \text{N·s}\). For a moderate 2 m/s shot, \(J\approx 0.34\ \text{N·s}\). These are useful sanity checks when relating cue-tip force profiles to ball launch speeds. citeturn30view0turn28search3turn18view4
+
+### Numerical stability, contact detection tolerances, and timestep guidance
+
+**Collision detection (CCD is strongly recommended):**
+
+- Ball–ball time of impact can be solved analytically for spheres via quadratic root of \(\|\mathbf{x}_{rel} + t\mathbf{v}_{rel}\| = R_A+R_B\).  
+- Ball–plane and ball–cushion can be solved similarly as ray/sphere vs plane; for curved cushions and pockets use conservative advancement or signed-distance fields.  
+Impulse-based simulation work emphasizes robust detection to prevent interpenetration and instability. citeturn9view4turn8search16  
+
+**Penetration slop / tolerances:**  
+Use a small spatial slop \(\varepsilon_p\) (e.g., 10–50 µm in world units if using meters; larger if using centimeters) for contact persistence and to avoid jitter, plus velocity thresholds for “sleeping” balls near rest. This is standard practice in iterative contact solvers. citeturn9view5turn8search1  
+
+**Time stepping strategies:**
+
+- **Event-driven (recommended for billiards):** integrate continuous dynamics with a fixed (or adaptive) \(\Delta t\) but resolve all collisions by advancing to earliest time-of-impact and applying impulses, potentially multiple times per frame. This avoids tunneling even at high break speeds. citeturn9view4turn8search3  
+- **Time stepping with constraints:** if using a projected Gauss–Seidel (PGS) style solver, use multiple iterations per frame for stability, and clamp friction impulses to a Coulomb cone. citeturn9view5turn8search1  
+- **Compliant/Hertz DEM-style:** stability requires \(\Delta t\) small relative to the Hertz contact duration \(t_H\); DEM literature often relates stable/critical time steps to fractions of \(t_H\). citeturn29search10  
+
+### Summary table of recommended default parameters
+
+The table below provides a practical default set (pool-centric) that is consistent with published equipment specs and experimental ranges. Values should be tuned to a specific table/cloth/ball set via the validation experiments listed afterward.
+
+| Category | Parameter | Recommended default | Notes / source basis |
+|---|---:|---:|---|
+| Ball geometry | Diameter \(D\) | 57.15 mm | WPA pool ball spec citeturn30view0 |
+|  | Radius \(R\) | 28.575 mm | Derived from \(D\) citeturn30view0 |
+| Ball mass | \(m\) | 0.170 kg | Upper end of WPA 156–170 g range (choose mid/upper for stability) citeturn30view0turn30view2 |
+| Ball inertia | \(I\) | \(0.4 mR^2\) | Homogeneous sphere approximation citeturn9view4 |
+| Ball material (optional Hertz) | \(E\) | 6.3 GPa | Representative phenolic laminate modulus citeturn34search20 |
+|  | \(\nu\) | 0.35 | Typical phenolic Poisson ratio range center citeturn34search34 |
+| Cloth friction | Sliding \(\mu_s\) | 0.21 | Avg reported in snooker modeling; calibrate for pool cloth citeturn20view5 |
+|  | Rolling \(\mu_r\) | 0.013 | From reported rolling deceleration (effective) citeturn6search5 |
+| Spin decay | \(\alpha_z\) | 22 rad/s² | Sidespin resistance measurement citeturn18view0 |
+| Ball–ball impact | Restitution \(e_{bb}\) | 0.90 | Start near 0.89 fit; allow speed-dependence citeturn20view5turn3search5 |
+|  | Friction \(\mu_{bb}\) | 0.05 | Clean balls; increase for “chalky” conditions citeturn20view5 |
+| Ball–cushion impact | Restitution \(e_{bw}\) | 0.95–0.98 | 0.98 fitted in cushion-impact study (stiff-cushion regime) citeturn13view4 |
+|  | Friction \(\mu_{bw}\) | 0.14 | Fitted value citeturn13view5 |
+| Cushion geometry | Nose height | 0.635·D | WPA: 63½% ± 1% of ball diameter citeturn25view0turn26view0 |
+| Pockets (pool) | Corner mouth | 4.50–4.625 in | WPA recommended citeturn25view0 |
+|  | Side mouth | 5.00–5.125 in | WPA recommended citeturn25view0 |
+|  | Corner shelf | 1.0–2.25 in | WPA recommended citeturn25view0 |
+|  | Side shelf | 0–0.375 in | WPA recommended citeturn25view0 |
+
+### Suggested validation experiments (to lock parameters to a specific table)
+
+Each experiment is chosen to isolate a small subset of parameters so you can fit them cleanly.
+
+1. **Rolling resistance fit (cloth/table speed)**  
+   Launch a ball in near-pure rolling at several initial speeds (0.5–2 m/s), record \(v(t)\), fit constant deceleration \(a\) and compute \(\mu_r=a/g\). Compare with reported rolling deceleration scale (~0.124–0.126 m/s²) and WPA/BCA “4–4½ table lengths” behavior. citeturn6search5turn25view0turn31view0  
+
+2. **Sliding friction fit (skid phase)**  
+   Launch with known initial spin/velocity mismatch (e.g., stun/draw/follow regimes) and fit \(\mu_s\) via the analytical \(t_{\text{roll}}=\frac{2}{7}\frac{|u_0|}{\mu_s g}\) relation. Target \(\mu_s\) in the 0.178–0.245 band unless your cloth differs. citeturn20view5  
+
+3. **Sidespin decay test**  
+   Spin the cue ball about vertical while nearly stationary, track \(\omega_z(t)\), and fit \(\alpha_z\) (constant decel) or a viscous term. Compare to ~22 rad/s². citeturn18view0  
+
+4. **Ball–ball restitution/friction calibration**  
+   Perform head-on and controlled cut-angle collisions at several speeds, measure outgoing speeds and angular velocities, and fit \(e_{bb}(v_n)\) and \(\mu_{bb}\). Use \(\mu_{bb}\approx 0.05\) and \(e\approx 0.89\) as starting values, but validate against your balls/cleanliness. citeturn20view5turn3search5  
+
+5. **Ball–cushion coefficient fit**  
+   Shoot a rolling ball into a cushion at varying incident angles and modest speeds (≤2.5 m/s if using stiff-cushion model assumptions), and fit \(e_{bw}\) and \(\mu_{bw}\) by minimizing rebound speed/angle error. Use 0.98 and 0.14 as starting values. citeturn13view4turn13view5  
+
+6. **Pocket acceptance mapping**  
+   Systematically vary approach angle, speed, and spin into each pocket type (corner vs side), and record pocketed vs rejected outcomes. Use WPA/BCA geometric parameters (mouth, shelf, cut angles, back draft) as the baseline geometry and fit liner/facing restitution/friction to reproduce rattle-outs and “hangups.” citeturn25view0turn31view0
