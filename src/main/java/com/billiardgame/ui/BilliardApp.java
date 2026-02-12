@@ -361,8 +361,17 @@ public final class BilliardApp extends Application {
             return;
         }
         gc.setStroke(Color.color(0.40, 0.95, 1.0, 0.75));
-        gc.setLineWidth(1.6);
+        gc.setLineWidth(2.0);
+        gc.setFill(Color.color(0.70, 0.98, 1.0, 0.90));
         for (PhysicsWorld.DebugSegment s : world.pocketMouthSegmentsPx()) {
+            gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+            double dotR = 2.2;
+            gc.fillOval(s.a().x() - dotR, s.a().y() - dotR, dotR * 2, dotR * 2);
+            gc.fillOval(s.b().x() - dotR, s.b().y() - dotR, dotR * 2, dotR * 2);
+        }
+        gc.setStroke(Color.color(0.52, 1.0, 0.62, 0.82));
+        gc.setLineWidth(1.6);
+        for (PhysicsWorld.DebugSegment s : world.pocketCornerOpeningGuidesPx()) {
             gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
         }
         gc.setStroke(Color.color(1.0, 0.92, 0.36, 0.78));

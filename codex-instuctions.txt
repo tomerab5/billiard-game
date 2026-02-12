@@ -1,29 +1,34 @@
-CUE BALL SCRATCH BUG: when cue ball is potted, cue appears but player cannot shoot.
+codex @'
+POCKET BLOCKER FIX: side pockets still not enterable. Temporarily remove/disable yellow pocket mouth colliders (jaw/facing) for PHYSICS collisions, and ensure ONLY segmented rail segments are used for bed containment.
 
 Acceptance (manual):
-- If cue ball enters a pocket, it is treated as SCRATCH.
-- After all balls come to rest, cue ball respawns on-table and player can aim and shoot normally.
-- No "ghost aiming" using an inactive cue ball.
-
-Implement minimal rules (no full 8-ball rules yet):
-- Add a flag scratchPending.
-- On cue ball pocket capture: set scratchPending=true; set cue ball state REMOVED/IN_POCKET as appropriate.
-- When world is at rest AND scratchPending:
-  - respawn cue ball at a safe default (e.g., table center or head spot) with v=0, omega=0, pocketZ=0, state ON_TABLE, active=true
-  - clear scratchPending
-  - set UI state to AIMING and allow shot.
-
-Also ensure:
-- Any code path that builds aim guide / cue position checks cueBall.active && cueBall.state==ON_TABLE.
+- Slow roll into top-middle and bottom-middle pockets enters (no bounce-back).
+- Corner pockets remain enterable too.
+- There is no global rectangular bounds reflection anywhere.
+- P debug can still DRAW pocket jaw/facing shapes, but they DO NOT collide while we’re validating mouth openings.
 
 Do:
-1) Locate where pocket capture happens and where ball states are set.
-2) Locate UI input handling for shooting (mouse release) and the AIMING/CHARGING state machine.
-3) Add scratch flow described above.
-4) Run: .\mvnw.cmd test
+1) Find all table-boundary enforcement:
+   rg -n "minX|maxX|minY|maxY|bounds|clamp|contain|outOfBounds|resolve.*rail|resolve.*cushion|segments" src/main/java/com/billiardgame/physics/PhysicsWorld.java
+
+2) Ensure there is exactly ONE collision path for rails:
+   - collisions must use the segmented rail list that includes gaps at mouths.
+   - delete/disable any other bounds clamp / full-length rails.
+
+3) Disable pocket mouth colliders for physics (temporary validation step):
+   - In PhysicsConfig add a boolean like POCKET_MOUTH_COLLIDERS_ENABLED default false (or a debug toggle).
+   - When false, skip resolving collisions against pocket facingSegments and jawArcs entirely.
+   - Keep shelf/capture logic unchanged.
+
+4) Improve debug visualization so we can verify the real blocker:
+   - P overlay draws ALL rail segments and their endpoints (dots).
+   - Ensure side-pocket gaps are visible as missing rail segments.
+
+5) Run: .\mvnw.cmd test
 
 Output:
 - Changed files
-- Where scratchPending is set/cleared
-- Where cue ball is respawned and UI state reset
+- Confirmation of what bounds logic was removed (if any)
+- Where the POCKET_MOUTH_COLLIDERS_ENABLED gate is applied
+- Rail segment count and proof gaps exist at side pockets
 '@
