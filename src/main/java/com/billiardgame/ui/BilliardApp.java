@@ -674,7 +674,11 @@ public final class BilliardApp extends Application {
         if (balls.isEmpty()) {
             return;
         }
-        Ball cueBall = balls.get(0);
+        int cueIndex = world.cueBallIndex();
+        if (cueIndex < 0 || cueIndex >= balls.size()) {
+            return;
+        }
+        Ball cueBall = balls.get(cueIndex);
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         Vector2 origin = cueBall.position();
         Vector2 toMouse = mousePosition.sub(origin);
@@ -682,7 +686,7 @@ public final class BilliardApp extends Application {
             return;
         }
         Vector2 direction = toMouse.normalized();
-        SceneHit firstHit = raycastScene(origin, direction, cueBall.radius(), balls, 0, PREDICTION_MAX_DISTANCE);
+        SceneHit firstHit = raycastScene(origin, direction, cueBall.radius(), balls, cueIndex, PREDICTION_MAX_DISTANCE);
         Vector2 endPoint = firstHit.hitPoint != null
                 ? firstHit.hitPoint
                 : origin.add(direction.mul(PREDICTION_MAX_DISTANCE));
@@ -697,7 +701,7 @@ public final class BilliardApp extends Application {
             double dn = (direction.x() * firstHit.normal.x()) + (direction.y() * firstHit.normal.y());
             Vector2 reflectionDirection = direction.sub(firstHit.normal.mul(2.0 * dn)).normalized();
             Vector2 start = firstHit.hitPoint.add(reflectionDirection.mul(RAYCAST_EPSILON_PX));
-            SceneHit secondHit = raycastScene(start, reflectionDirection, cueBall.radius(), balls, 0, POST_COLLISION_PREVIEW_DISTANCE);
+            SceneHit secondHit = raycastScene(start, reflectionDirection, cueBall.radius(), balls, cueIndex, POST_COLLISION_PREVIEW_DISTANCE);
             Vector2 after = secondHit.hitPoint != null
                     ? secondHit.hitPoint
                     : start.add(reflectionDirection.mul(POST_COLLISION_PREVIEW_DISTANCE));
@@ -716,7 +720,7 @@ public final class BilliardApp extends Application {
             if (cueDeflectDirection.length() > 1e-6) {
                 Vector2 cueStart = firstHit.hitPoint.add(cueDeflectDirection.mul(0.5));
                 double cueSegLen = POST_COLLISION_PREVIEW_DISTANCE * 0.75;
-                SceneHit secondHit = raycastScene(cueStart, cueDeflectDirection, cueBall.radius(), balls, 0, cueSegLen);
+                SceneHit secondHit = raycastScene(cueStart, cueDeflectDirection, cueBall.radius(), balls, cueIndex, cueSegLen);
                 Vector2 cueAfter = secondHit.hitPoint != null
                         ? secondHit.hitPoint
                         : cueStart.add(cueDeflectDirection.mul(cueSegLen));
@@ -1029,7 +1033,11 @@ public final class BilliardApp extends Application {
             }
         }
 
-        Vector2 cueVel = world.ballVelocity(0);
+        int cueIndex = world.cueBallIndex();
+        if (cueIndex < 0 || cueIndex >= world.ballCount()) {
+            return;
+        }
+        Vector2 cueVel = world.ballVelocity(cueIndex);
         double speed = cueVel.length();
         if (speed > 20) {
             Ball cueBall = world.cueBall();
@@ -1108,8 +1116,9 @@ public final class BilliardApp extends Application {
         }
         gc.save();
         gc.setGlobalAlpha(alphaMul);
-        Color midColor = index == 0 ? Color.web("#f4f4f4") : Color.web("#d84d4d");
-        Color edgeColor = index == 0 ? Color.web("#cfcfcf") : Color.web("#8b2323");
+        boolean cue = world.ballIsCue(index);
+        Color midColor = cue ? Color.web("#f4f4f4") : Color.web("#d84d4d");
+        Color edgeColor = cue ? Color.web("#cfcfcf") : Color.web("#8b2323");
         double lightX = LIGHT_DIR_SCREEN.x();
         double lightY = LIGHT_DIR_SCREEN.y();
         double speed = world.ballVelocity(index).length();
@@ -1157,7 +1166,7 @@ public final class BilliardApp extends Application {
 
             if (showAdvancedLighting && ballSpeckleTexture != null) {
                 gc.save();
-                gc.setGlobalAlpha((index == 0 ? 0.05 : 0.04) * alphaMul);
+                gc.setGlobalAlpha((cue ? 0.05 : 0.04) * alphaMul);
                 gc.setFill(new ImagePattern(ballSpeckleTexture, x - r, y - r, r * 1.35, r * 1.35, false));
                 gc.fillOval(x - r, y - r, r * 2, r * 2);
                 gc.restore();
@@ -1186,7 +1195,7 @@ public final class BilliardApp extends Application {
             gc.fillOval(x - r, y - r, r * 2, r * 2);
         }
 
-        if (index > 0) {
+        if (!cue) {
             gc.setFill(Color.color(0.97, 0.97, 0.97, 0.92));
             gc.fillOval(x - r * 0.65, y - r * 0.32, r * 1.3, r * 0.64);
             gc.setFill(Color.color(0.16, 0.16, 0.16, 0.60));
@@ -1243,7 +1252,7 @@ public final class BilliardApp extends Application {
         for (int i = 0; i < balls.size(); i++) {
             Ball ball = balls.get(i);
             double r = ball.radius();
-            Color bloom = i == 0
+            Color bloom = world.ballIsCue(i)
                     ? Color.color(0.88, 0.92, 1.0, 0.20)
                     : Color.color(1.0, 0.54, 0.45, 0.16);
             gc.setFill(new RadialGradient(
@@ -1276,8 +1285,9 @@ public final class BilliardApp extends Application {
         String cueMode = world.cueBallMotionMode() == PhysicsWorld.MotionMode.SLIDING ? "SLIDE" : "ROLL";
         double muR = world.rollingFriction();
         double rollAccel = world.rollingDecelMps2();
-        double wMag = world.ballAngularVelocity(0).length();
-        double wz = world.ballAngularVelocity(0).z();
+        int cueIndex = world.cueBallIndex();
+        double wMag = cueIndex >= 0 ? world.ballAngularVelocity(cueIndex).length() : 0.0;
+        double wz = cueIndex >= 0 ? world.ballAngularVelocity(cueIndex).z() : 0.0;
 
         gc.setFill(Color.color(0.02, 0.06, 0.08, 0.73));
         gc.fillRoundRect(14, 14, 320, 152, 14, 14);
@@ -1297,6 +1307,18 @@ public final class BilliardApp extends Application {
         gc.fillText(String.format("mu_rail %.3f   e_rail %.2f", PhysicsConfig.MU_RAIL, PhysicsConfig.RAIL_RESTITUTION), 26, 116);
         gc.fillText(String.format("tip (%.2f, %.2f)", tipOffsetNorm.x(), tipOffsetNorm.y()), 26, 136);
         gc.fillText(String.format("|w| %.2f   wz %.2f", wMag, wz), 26, 156);
+        if (showPocketDebug || showOmegaOverlay) {
+            gc.setFont(Font.font("Consolas", FontWeight.BOLD, 11));
+            int y = 172;
+            for (String line : world.ballPocketDebugLines()) {
+                gc.fillText(line, 26, y);
+                y += 12;
+                if (y > 236) {
+                    break;
+                }
+            }
+            gc.setFont(Font.font("Georgia", 14));
+        }
 
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         gc.setFill(Color.color(0.01, 0.03, 0.04, 0.78));

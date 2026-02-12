@@ -35,8 +35,10 @@ public final class PhysicsWorld {
     private int pocketEscapeGuardHits;
     private int pocketEscapeGuardLastPocketId;
     private String pocketEscapeGuardLastPocketType;
+    private final boolean scratchEnabled;
     private boolean scratchPending;
     private boolean cueBallRespawnedThisStep;
+    private int nextBallId;
 
     public static final class DebugSegment {
         private final Vector2 a;
@@ -96,8 +98,11 @@ public final class PhysicsWorld {
         }
         this.pixelsPerMeter = pixelsPerMeter;
         balls = new ArrayList<>();
-        for (Ball initialBall : initialBalls) {
+        for (int i = 0; i < initialBalls.size(); i++) {
+            Ball initialBall = initialBalls.get(i);
             balls.add(new BallBody(
+                    nextBallId++,
+                    i == 0,
                     toMeters(initialBall.position()),
                     Vector2.ZERO,
                     Vector3.ZERO,
@@ -125,6 +130,7 @@ public final class PhysicsWorld {
         this.pocketEscapeGuardHits = 0;
         this.pocketEscapeGuardLastPocketId = -1;
         this.pocketEscapeGuardLastPocketType = "none";
+        this.scratchEnabled = initialBalls.size() > 1;
         this.scratchPending = false;
         this.cueBallRespawnedThisStep = false;
     }
@@ -138,10 +144,7 @@ public final class PhysicsWorld {
     }
 
     public Ball cueBall() {
-        if (balls.isEmpty()) {
-            throw new IllegalStateException("No balls in world");
-        }
-        return toRenderBall(balls.get(0));
+        return toRenderBall(requireCueBody());
     }
 
     public Ball ball(int index) {
@@ -149,13 +152,10 @@ public final class PhysicsWorld {
     }
 
     public void setCueBallVelocity(Vector2 velocity) {
-        if (balls.isEmpty()) {
-            throw new IllegalStateException("No balls in world");
-        }
         if (!isCueBallOnTable()) {
             return;
         }
-        balls.get(0).velocity = toMeters(velocity);
+        requireCueBody().velocity = toMeters(velocity);
     }
 
     public void setBallVelocity(int index, Vector2 velocity) {
@@ -183,29 +183,20 @@ public final class PhysicsWorld {
     }
 
     public MotionMode cueBallMotionMode() {
-        if (balls.isEmpty()) {
-            throw new IllegalStateException("No balls in world");
-        }
         if (!isCueBallOnTable()) {
             return MotionMode.ROLLING;
         }
-        return balls.get(0).mode;
+        return requireCueBody().mode;
     }
 
     public double cueBallSpeed() {
-        if (balls.isEmpty()) {
-            throw new IllegalStateException("No balls in world");
-        }
         if (!isCueBallOnTable()) {
             return 0.0;
         }
-        return toPixels(balls.get(0).velocity).length();
+        return toPixels(requireCueBody().velocity).length();
     }
 
     public void strikeCueBall(Vector2 directionPx, double speedPxPerSec, Vector2 tipOffsetNorm) {
-        if (balls.isEmpty()) {
-            throw new IllegalStateException("No balls in world");
-        }
         if (!isCueBallOnTable()) {
             return;
         }
@@ -213,7 +204,7 @@ public final class PhysicsWorld {
             return;
         }
 
-        BallBody cue = balls.get(0);
+        BallBody cue = requireCueBody();
         Vector2 dir = directionPx.normalized();
         double speedMps = speedPxPerSec / pixelsPerMeter;
         Vector3 impulse = toVec3(dir.mul(cue.mass * speedMps));
@@ -258,6 +249,9 @@ public final class PhysicsWorld {
 
     public boolean allBallsNearlyStopped() {
         for (BallBody ballBody : balls) {
+            if (ballBody.pocketState != BallPocketState.ON_TABLE) {
+                continue;
+            }
             if (ballBody.velocity.length() >= PhysicsConfig.STOP_EPS_M_PER_S) {
                 return false;
             }
@@ -273,16 +267,45 @@ public final class PhysicsWorld {
     }
 
     public boolean isCueBallOnTable() {
-        if (balls.isEmpty()) {
-            return false;
-        }
-        return balls.get(0).pocketState == BallPocketState.ON_TABLE;
+        BallBody cue = findCueBody();
+        return cue != null && cue.pocketState == BallPocketState.ON_TABLE;
     }
 
     public boolean consumeCueBallRespawnedThisStep() {
         boolean out = cueBallRespawnedThisStep;
         cueBallRespawnedThisStep = false;
         return out;
+    }
+
+    public int cueBallIndex() {
+        for (int i = 0; i < balls.size(); i++) {
+            if (balls.get(i).isCue) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public boolean ballIsCue(int index) {
+        return balls.get(index).isCue;
+    }
+
+    public int ballId(int index) {
+        return balls.get(index).id;
+    }
+
+    public List<String> ballPocketDebugLines() {
+        List<String> out = new ArrayList<>();
+        for (BallBody body : balls) {
+            out.add(String.format(
+                    "id=%d type=%s state=%s tPocket=%.2f",
+                    body.id,
+                    body.isCue ? "CUE" : "OBJ",
+                    body.pocketState,
+                    body.timeInPocketState
+            ));
+        }
+        return List.copyOf(out);
     }
 
     public List<DebugSegment> pocketMouthSegmentsPx() {
@@ -359,6 +382,9 @@ public final class PhysicsWorld {
 
     public double ballRenderScale(int index) {
         BallBody body = balls.get(index);
+        if (body.pocketState == BallPocketState.REMOVED) {
+            return 0.0;
+        }
         if (body.pocketState == BallPocketState.ON_TABLE) {
             return 1.0;
         }
@@ -367,6 +393,9 @@ public final class PhysicsWorld {
 
     public double ballRenderAlpha(int index) {
         BallBody body = balls.get(index);
+        if (body.pocketState == BallPocketState.REMOVED) {
+            return 0.0;
+        }
         if (body.pocketState == BallPocketState.ON_TABLE) {
             return 1.0;
         }
@@ -404,6 +433,8 @@ public final class PhysicsWorld {
                 updatePocketState(ballBody, dtSeconds);
                 continue;
             }
+            ballBody.timeInPocketState = 0.0;
+            ballBody.pocketStillTimer = 0.0;
             double pocketDamping = pocketModel.captureApproachDamping(ballBody.position, ballBody.radius, dtSeconds);
             if (pocketDamping < 1.0) {
                 ballBody.velocity = ballBody.velocity.mul(pocketDamping);
@@ -422,7 +453,7 @@ public final class PhysicsWorld {
                 ballBody.angularVelocity = ballBody.angularVelocity.mul(0.60);
                 ballBody.pocketTimer = 0.0;
                 ballBody.pocketEscapeGuarded = false;
-                if (ballBody == balls.get(0) && balls.size() > 1) {
+                if (ballBody.isCue && scratchEnabled) {
                     scratchPending = true;
                 }
             }
@@ -432,12 +463,12 @@ public final class PhysicsWorld {
             if (balls.get(i).pocketState != BallPocketState.REMOVED) {
                 continue;
             }
-            if (i == 0 && scratchPending) {
+            if (balls.get(i).isCue && scratchPending && scratchEnabled) {
                 continue;
             }
             balls.remove(i);
         }
-        if (scratchPending && !balls.isEmpty() && allBallsNearlyStopped()) {
+        if (scratchPending && scratchEnabled && !balls.isEmpty() && allBallsNearlyStopped()) {
             respawnCueBall();
         }
     }
@@ -659,7 +690,7 @@ public final class PhysicsWorld {
         body.velocity = body.velocity.mul(0.30);
         body.angularVelocity = body.angularVelocity.mul(0.40);
         body.pocketEscapeGuarded = true;
-        if (body == balls.get(0) && balls.size() > 1) {
+        if (body.isCue && scratchEnabled) {
             scratchPending = true;
         }
         pocketEscapeGuardHits++;
@@ -668,11 +699,11 @@ public final class PhysicsWorld {
     }
 
     private void respawnCueBall() {
-        if (balls.isEmpty()) {
+        BallBody cue = findCueBody();
+        if (cue == null) {
             scratchPending = false;
             return;
         }
-        BallBody cue = balls.get(0);
         Vector2 spawn = findCueBallRespawnPosition(cue.radius);
         cue.position = spawn;
         cue.velocity = Vector2.ZERO;
@@ -726,8 +757,10 @@ public final class PhysicsWorld {
     private boolean isCueSpawnClear(Vector2 position, double radius) {
         double minGap = radius * 2.05;
         double minGapSq = minGap * minGap;
-        for (int i = 1; i < balls.size(); i++) {
-            BallBody other = balls.get(i);
+        for (BallBody other : balls) {
+            if (other.isCue) {
+                continue;
+            }
             if (other.pocketState != BallPocketState.ON_TABLE) {
                 continue;
             }
@@ -768,6 +801,7 @@ public final class PhysicsWorld {
 
     private void updatePocketState(BallBody body, double dtSeconds) {
         body.pocketTimer += dtSeconds;
+        body.timeInPocketState += dtSeconds;
         if (body.pocketCenter != null) {
             Vector2 toCenter = body.pocketCenter.sub(body.position);
             double pullRate = body.pocketEscapeGuarded ? 4.2 : 8.0;
@@ -790,9 +824,22 @@ public final class PhysicsWorld {
         body.velocity = body.velocity.mul(Math.max(0.0, 1.0 - linerDamping * dtSeconds));
         body.angularVelocity = body.angularVelocity.mul(Math.max(0.0, 1.0 - spinDamping * dtSeconds));
         body.velocity = body.velocity.mul(PhysicsConfig.POCKET_LINER_RESTITUTION);
+        if (body.velocity.length() < PhysicsConfig.STOP_EPS_M_PER_S
+                && Math.abs(body.angularVelocity.z()) < PhysicsConfig.STOP_SPIN_EPS_RAD_PER_S) {
+            body.pocketStillTimer += dtSeconds;
+        } else {
+            body.pocketStillTimer = 0.0;
+        }
         body.pocketZ += (body.radius * 3.0) * dtSeconds;
         if (body.pocketState == BallPocketState.ENTERING_POCKET && body.pocketTimer >= 0.10) {
             body.pocketState = BallPocketState.IN_POCKET;
+        }
+        if (body.pocketStillTimer > 0.25 || body.timeInPocketState > 2.0) {
+            if (body.isCue && scratchEnabled) {
+                scratchPending = true;
+            }
+            body.pocketState = BallPocketState.REMOVED;
+            return;
         }
         if (body.pocketTimer >= 0.45) {
             body.pocketState = BallPocketState.REMOVED;
@@ -904,6 +951,23 @@ public final class PhysicsWorld {
         return new Ball(toPixels(body.position), toPixels(body.radius));
     }
 
+    private BallBody findCueBody() {
+        for (BallBody body : balls) {
+            if (body.isCue) {
+                return body;
+            }
+        }
+        return null;
+    }
+
+    private BallBody requireCueBody() {
+        BallBody cue = findCueBody();
+        if (cue == null) {
+            throw new IllegalStateException("Cue ball not found");
+        }
+        return cue;
+    }
+
     private Vector2 toMeters(Vector2 valuePx) {
         return valuePx.mul(1.0 / pixelsPerMeter);
     }
@@ -921,6 +985,8 @@ public final class PhysicsWorld {
     }
 
     private static final class BallBody {
+        private final int id;
+        private final boolean isCue;
         private Vector2 position;
         private Vector2 velocity;
         private Vector3 angularVelocity;
@@ -932,9 +998,13 @@ public final class PhysicsWorld {
         private Vector2 pocketCenter;
         private double pocketZ;
         private double pocketTimer;
+        private double timeInPocketState;
+        private double pocketStillTimer;
         private boolean pocketEscapeGuarded;
 
-        private BallBody(Vector2 position, Vector2 velocity, Vector3 angularVelocity, double radius, double mass) {
+        private BallBody(int id, boolean isCue, Vector2 position, Vector2 velocity, Vector3 angularVelocity, double radius, double mass) {
+            this.id = id;
+            this.isCue = isCue;
             this.position = position;
             this.velocity = velocity;
             this.angularVelocity = angularVelocity;
@@ -946,6 +1016,8 @@ public final class PhysicsWorld {
             this.pocketCenter = null;
             this.pocketZ = 0.0;
             this.pocketTimer = 0.0;
+            this.timeInPocketState = 0.0;
+            this.pocketStillTimer = 0.0;
             this.pocketEscapeGuarded = false;
         }
     }

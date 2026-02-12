@@ -1,26 +1,55 @@
 codex @'
-CUE BALL SCRATCH FIX: cue ball gets captured and stays stuck in the hole. It must respawn so the player can continue.
+BUG: cue ball can get stuck inside a pocket, seems to happen after the other ball is removed.
+Likely causes:
+- cue ball identification based on list index/order (breaks after removals)
+- pocket state tracking keyed by list index (breaks after removals)
+- "world at rest" check includes removed/in-pocket balls incorrectly so scratch respawn never triggers
+- pocket finalize step not executed for IN_POCKET balls with near-zero velocity
+
+Goal:
+- Cue ball can NEVER remain stuck in ENTERING_POCKET/IN_POCKET indefinitely.
+- Scratch behavior must trigger reliably regardless of other balls being removed.
 
 Acceptance (manual):
-- If cue ball is potted, it behaves like a scratch:
-  - cue ball does NOT remain stuck forever
-  - after all balls stop, cue ball respawns on table and user can shoot again
-- Other balls remain removed when potted.
+1) Pot red ball, then pot cue ball in any pocket -> cue ball respawns after rest (no stuck).
+2) Pot cue ball first -> respawns after rest.
+3) No behavior depends on ball list index/order.
 
-Implement minimal rules (no full 8-ball rules):
-1) Add boolean scratchPending to game/UI controller state (where input state lives) or PhysicsWorld if easier.
-2) Detect cue ball capture (when ball type is CUE or id==0):
-   - set scratchPending=true
-   - allow the cue ball to go through the pocket drop animation / be IN_POCKET
-3) When world is at rest (all active balls speed < threshold) AND scratchPending:
-   - respawn cue ball at a safe default position (e.g., head spot or table center away from other balls)
-   - set v=0, omega=0, pocketZ=0, state=ON_TABLE, active=true
-   - clear scratchPending
-   - reset UI to AIMING and allow shot
+Do:
+1) Find how cue ball is identified:
+   rg -n "cueBall|isCue|CUE|balls\\.get\\(0\\)|indexOf\\(|ballId|type" src/main/java/com/billiardgame
 
-Also ensure:
-- Aim/shot code rejects cue ball only if it is not ON_TABLE; once respawned it must work.
+2) Ensure cue ball identity is stable:
+   - If Ball has type/flag/id: use that (e.g., BallType.CUE or isCueBall()).
+   - If not, add a stable field (ballId and/or boolean isCue) set at creation time.
+
+3) Find pocket state tracking / maps:
+   rg -n "ENTERING_POCKET|IN_POCKET|REMOVED|pocketCenter|timeInPocket|Map<|HashMap" src/main/java/com/billiardgame/physics/PhysicsWorld.java
+   Ensure any per-ball tracking is keyed by stable ballId (NOT list index).
+
+4) Add a 'timeInPocketState' accumulator per ball (or per ballId).
+   - increment while state != ON_TABLE
+   - reset on ON_TABLE
+
+5) Add a watchdog finalize:
+   - If ball.state == IN_POCKET or ENTERING_POCKET AND (|v| < eps && |omega| < eps) for > 0.25s OR timeInPocketState > 2.0s:
+       - If cue ball -> set scratchPending = true and mark ball as REMOVED (or keep hidden) so it cannot collide/render stuck
+       - If object ball -> mark REMOVED and remove from active collision list
+   This prevents 'stuck forever' even if some gate fails.
+
+6) Fix "world at rest" detection used for scratch respawn:
+   - Should ignore REMOVED balls.
+   - Should consider ON_TABLE balls only (or ON_TABLE + ENTERING) but must allow rest to become true.
+   - After rest AND scratchPending -> respawn cue ball ON_TABLE.
+
+7) Add debug overlay line (toggle key O or P):
+   - for each ball: id/type/state + timeInPocketState
+   so we can see if it’s failing to finalize.
 
 Run: .\mvnw.cmd test
-Output: changed files and where scratchPending is set/cleared and where cue ball respawns.
+Output:
+- Changed files
+- How cue ball is identified now (no index assumptions)
+- How pocket tracking is keyed
+- Watchdog condition
 '@
