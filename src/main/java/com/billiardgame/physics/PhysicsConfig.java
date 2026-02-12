@@ -76,6 +76,8 @@ public final class PhysicsConfig {
     // [Ball-pocket physics] Placeholder material coefficients for jaw/liner models.
     public static final double POCKET_JAW_RESTITUTION = 0.40;
     public static final double POCKET_JAW_FRICTION = 0.35;
+    public static final double POCKET_FACING_RESTITUTION = 0.10;
+    public static final double POCKET_FACING_FRICTION = 0.55;
     public static final double POCKET_LINER_RESTITUTION = 0.30;
     public static final double POCKET_LINER_FRICTION = 0.45;
     // Validation toggle: mouth-facing/jaw colliders can be disabled while checking pocket openings.

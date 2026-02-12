@@ -1,47 +1,32 @@
 codex @'
-BUG: Balls that reach a pocket keep going and leave the table (escape the world).
+POCKET FACINGS TOO STRONG: No shot can enter. Ball touches mouth corner and jumps out.
 
-Goal: ON_TABLE balls must NEVER escape the simulation.
-If a ball exits bed bounds near a pocket mouth, treat it as entering the pocket (ENTERING_POCKET) and apply damping/funnel. If it exits elsewhere, clamp/reflect (should not happen).
-
-Acceptance (manual):
-- No ball can travel outside the table forever.
-- A ball that passes through a pocket opening transitions to ENTERING_POCKET and gets damped inward (eventually captured/removed).
-- Side/corner near-misses still bounce once we add facings later, but for now: no escape.
+Goal:
+- Near-miss bounces back.
+- True entry goes in (cannot be ejected by facings once past the rail line).
+- Keep no-escape guard as fallback only after passing deeper threshold.
 
 Do:
-1) Find bed bounds and pocket centers/radii used by PocketModel:
-   rg -n "bedMin|bedMax|table.*Min|table.*Max|PocketModel|pocketCenters|corner|side.*pocket" src/main/java/com/billiardgame/physics/PhysicsWorld.java
+1) Locate facing collision code and facing geometry:
+   rg -n "facing|facings|POCKET_MOUTH|jaw|restitution|friction|one[- ]sided|normal" src/main/java/com/billiardgame/physics/PhysicsWorld.java src/main/java/com/billiardgame/physics/PhysicsConfig.java
 
-2) Implement helper:
-   - PocketHit classifyPocketExit(Vector2 p, double ballR)
-     returns nearest pocket center + mouthRadius + type if p is within (mouthRadius + ballR*1.5)
+2) Fix facing material response:
+   - Set facing restitution LOW (e.g. 0.1 default) and friction higher.
+   - Use separate constants if needed: POCKET_FACING_RESTITUTION, POCKET_FACING_FRICTION.
 
-3) In PhysicsWorld.step(...) AFTER integration + normal collisions, for each ball with state ON_TABLE:
-   - if outside bed bounds by eps (e.g. ballR*0.25):
-       - PocketHit hit = classifyPocketExit(p, ballR)
-       - if hit != null:
-           set state=ENTERING_POCKET
-           store target pocket center for that ball
-           apply immediate damping: v*=0.5, omega*=0.5 (or config)
-       - else:
-           clamp position back inside bed and reflect velocity (debug safety)
+3) Fix facing geometry so it does NOT intrude into bed:
+   - Anchor at the rail-gap endpoints.
+   - Second endpoint should be in the direction toward pocket center BUT ensure it lies OUTSIDE the bed (or behind the rail line).
+   - In debug (P), draw facings and their normals.
 
-4) In ENTERING_POCKET update:
-   - apply strong damping each step
-   - apply small acceleration toward pocket center (funnel) so it can’t drift away
-   - after a short time or when within capture radius, transition to IN_POCKET/REMOVED (existing logic)
+4) Critical: disable facing collisions once ball is already inside the mouth:
+   - Define bed rect (minX/maxX/minY/maxY).
+   - For each facing collision candidate, if ball center is already outside the bed by > small eps OR is closer to pocket center than the rail-line by threshold, SKIP facing collision.
+   (Meaning: facings only affect balls still on the bed side.)
 
-5) Add debug counter on overlay (P or O):
-   - pocketEscapesCaught++
-   - pocketEscapesClamped++
-   so we can confirm the guard triggers.
+5) One-sided collision correctness:
+   - Only resolve if signedDistance < 0 AND vn = dot(v, normal) < 0 (approaching).
+   - Ensure normal points toward bed interior.
 
-6) Run: .\mvnw.cmd test
-
-Output:
-- Changed files
-- The exact outside-bounds condition
-- The pocket classification radius used
-- Debug counters location
-'@
+6) Adjust no-escape guard to trigger deeper:
+   - Only convert to ENTERING_POCKET if bal_

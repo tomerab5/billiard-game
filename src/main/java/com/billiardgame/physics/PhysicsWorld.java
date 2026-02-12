@@ -693,14 +693,17 @@ public final class PhysicsWorld {
             return;
         }
         for (FacingSegment fs : pocketModel.facingSegments) {
+            if (isPastMouthForFacing(body, fs)) {
+                continue;
+            }
             Vector2 closest = closestPointOnSegment(body.position, fs.segment);
             CollisionContact c = segmentCollision(body.position, body.radius, fs.segment);
             if (c == null) {
                 continue;
             }
             Vector2 inward = fs.bedSideNormal;
-            double signedDistanceToFacing = dot(body.position.sub(closest), inward);
-            if (signedDistanceToFacing <= 0.0) {
+            double signedDistanceToFacing = dot(closest.sub(body.position), inward);
+            if (signedDistanceToFacing >= 0.0) {
                 continue;
             }
             if (dot(c.normal, inward) <= 0.0) {
@@ -713,8 +716,25 @@ public final class PhysicsWorld {
                 continue;
             }
             body.position = body.position.add(inward.mul(c.penetration + 1e-6));
-            applySurfaceImpulse(body, inward, PhysicsConfig.POCKET_JAW_RESTITUTION, PhysicsConfig.POCKET_JAW_FRICTION);
+            applySurfaceImpulse(body, inward, PhysicsConfig.POCKET_FACING_RESTITUTION, PhysicsConfig.POCKET_FACING_FRICTION);
         }
+    }
+
+    private boolean isPastMouthForFacing(BallBody body, FacingSegment fs) {
+        double bedOutsideEps = body.radius * 0.15;
+        if (body.position.x() < bedMinX - bedOutsideEps
+                || body.position.x() > bedMaxX + bedOutsideEps
+                || body.position.y() < bedMinY - bedOutsideEps
+                || body.position.y() > bedMaxY + bedOutsideEps) {
+            return true;
+        }
+        double pastRailDepth = dot(body.position.sub(fs.anchor), fs.pocketDirection);
+        if (pastRailDepth > (body.radius * 0.20)) {
+            return true;
+        }
+        double railDistance = fs.anchor.sub(fs.pocketCenter).length();
+        double distToPocket = body.position.sub(fs.pocketCenter).length();
+        return distToPocket < (railDistance - (body.radius * 0.25));
     }
 
     private void containOnTableBall(BallBody body) {
@@ -766,7 +786,14 @@ public final class PhysicsWorld {
         if (nearest == null) {
             return null;
         }
-        double triggerRadius = nearest.radius + (ballR * 1.5);
+        double depthPastBed = Math.max(
+                Math.max(bedMinX - p.x(), p.x() - bedMaxX),
+                Math.max(bedMinY - p.y(), p.y() - bedMaxY)
+        );
+        if (depthPastBed < (ballR * 0.35)) {
+            return null;
+        }
+        double triggerRadius = nearest.radius + (ballR * 1.20);
         if (p.sub(nearest.center).length() > triggerRadius) {
             return null;
         }
@@ -1259,11 +1286,17 @@ public final class PhysicsWorld {
     }
 
     private static final class FacingSegment {
+        private final Vector2 anchor;
         private final Segment2 segment;
+        private final Vector2 pocketCenter;
+        private final Vector2 pocketDirection;
         private final Vector2 bedSideNormal;
 
-        private FacingSegment(Segment2 segment, Vector2 bedSideNormal) {
+        private FacingSegment(Vector2 anchor, Segment2 segment, Vector2 pocketCenter, Vector2 bedSideNormal) {
+            this.anchor = anchor;
             this.segment = segment;
+            this.pocketCenter = pocketCenter;
+            this.pocketDirection = pocketCenter.sub(anchor).normalized();
             this.bedSideNormal = bedSideNormal.normalized();
         }
     }
@@ -1357,18 +1390,18 @@ public final class PhysicsWorld {
             }
 
             List<FacingSegment> facings = new ArrayList<>();
-            addFacingFromAnchor(facings, new Vector2(left + cornerMouth, top), topLeftCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(left, top + cornerMouth), topLeftCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(cx - mouthHalf, top), topMiddleCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(cx + mouthHalf, top), topMiddleCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(right - cornerMouth, top), topRightCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(right, top + cornerMouth), topRightCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(left, bottom - cornerMouth), bottomLeftCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(left + cornerMouth, bottom), bottomLeftCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(cx - mouthHalf, bottom), bottomMiddleCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(cx + mouthHalf, bottom), bottomMiddleCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(right, bottom - cornerMouth), bottomRightCenter, facingLength);
-            addFacingFromAnchor(facings, new Vector2(right - cornerMouth, bottom), bottomRightCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(left + cornerMouth, top), topLeftCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(left, top + cornerMouth), topLeftCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(cx - mouthHalf, top), topMiddleCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(cx + mouthHalf, top), topMiddleCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(right - cornerMouth, top), topRightCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(right, top + cornerMouth), topRightCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(left, bottom - cornerMouth), bottomLeftCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(left + cornerMouth, bottom), bottomLeftCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(cx - mouthHalf, bottom), bottomMiddleCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(cx + mouthHalf, bottom), bottomMiddleCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(right, bottom - cornerMouth), bottomRightCenter, facingLength, left, right, top, bottom);
+            addFacingFromAnchor(facings, new Vector2(right - cornerMouth, bottom), bottomRightCenter, facingLength, left, right, top, bottom);
 
             List<ShelfLine> shelves = new ArrayList<>();
             shelves.add(new ShelfLine(new Segment2(new Vector2(left + cornerMouth, top + dropDepth), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
@@ -1410,18 +1443,43 @@ public final class PhysicsWorld {
             out.add(new RailSegment(new Segment2(a, b), side));
         }
 
-        private static void addFacingFromAnchor(List<FacingSegment> out, Vector2 anchor, Vector2 pocketCenter, double facingLength) {
+        private static void addFacingFromAnchor(List<FacingSegment> out, Vector2 anchor, Vector2 pocketCenter, double facingLength, double bedLeft, double bedRight, double bedTop, double bedBottom) {
             Vector2 toPocket = pocketCenter.sub(anchor);
             if (toPocket.lengthSq() <= 1e-12) {
                 return;
             }
             Vector2 direction = toPocket.normalized();
             Vector2 tip = anchor.add(direction.mul(facingLength));
+            if (tip.x() >= bedLeft && tip.x() <= bedRight && tip.y() >= bedTop && tip.y() <= bedBottom) {
+                double outsideMargin = facingLength * 0.20;
+                double exitDistance = minimumDistanceToExitRect(anchor, direction, bedLeft, bedRight, bedTop, bedBottom);
+                if (Double.isFinite(exitDistance)) {
+                    tip = anchor.add(direction.mul(Math.max(facingLength, exitDistance + outsideMargin)));
+                }
+            }
             Vector2 bedNormal = anchor.sub(pocketCenter);
             if (bedNormal.lengthSq() <= 1e-12) {
                 return;
             }
-            out.add(new FacingSegment(new Segment2(anchor, tip), bedNormal));
+            out.add(new FacingSegment(anchor, new Segment2(anchor, tip), pocketCenter, bedNormal));
+        }
+
+        private static double minimumDistanceToExitRect(Vector2 origin, Vector2 direction, double left, double right, double top, double bottom) {
+            double best = Double.POSITIVE_INFINITY;
+            if (direction.x() > 1e-9) {
+                best = Math.min(best, (right - origin.x()) / direction.x());
+            } else if (direction.x() < -1e-9) {
+                best = Math.min(best, (left - origin.x()) / direction.x());
+            }
+            if (direction.y() > 1e-9) {
+                best = Math.min(best, (bottom - origin.y()) / direction.y());
+            } else if (direction.y() < -1e-9) {
+                best = Math.min(best, (top - origin.y()) / direction.y());
+            }
+            if (best <= 0.0) {
+                return Double.POSITIVE_INFINITY;
+            }
+            return best;
         }
 
         private int railSegmentCount() {
