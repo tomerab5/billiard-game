@@ -1,22 +1,40 @@
-AIM GUIDE FIX: The 2nd yellow segment now stops correctly, but when that 2nd segment hits a BALL (after a rail bounce), we must ALSO draw the WHITE line predicting the struck ball’s trajectory — same behavior as when the 1st segment hits a ball.
+POCKET FIX: pockets currently behave like circular bumpers intruding into the table (they push balls away and make potting impossible).
+We must rework pocket collision filtering/geometry so the pocket mouth is a TRUE cutout.
 
-Acceptance:
-- If segment1 hits ball -> draw white object-ball line (existing behavior).
-- If segment1 hits rail and segment2 hits ball -> draw white object-ball line at segment2 end (NEW requirement).
-- White line direction should be computed from the predicted collision geometry at that segment’s impact:
-  Use cueCenterAtImpact = segOrigin + dir * tHit (tHit returned by raycast vs expanded radius Rsum = cueR + targetR),
-  then normal = normalize(targetCenter - cueCenterAtImpact),
-  then draw the white line from targetCenter along 'normal'. No extra yellow segments.
+Acceptance (manual):
+- A ball can roll into a pocket without being repelled by an invisible circle inside the table.
+- Collisions happen only on realistic facings/jaws near the rail ends (rattle/spit-out possible).
+- The open mouth region has NO collision surfaces.
+- Capture still uses shelf crossing + depth gate (do not revert to instant sensor potting).
 
 Do:
-1) Locate aim guide code:
-   rg -n "drawAimGuide|trajectory|predict|raycast|HitType|white" src/main/java/com/billiardgame/ui/BilliardApp.java
-2) Ensure the segment2 hit branch (HitType.BALL) calls the SAME helper used for segment1 to draw the object-ball white line.
-   If there is no shared helper, create one: drawObjectBallPrediction(Ball target, Vec2 cueCenterAtImpact, Vec2 dirIncoming)
-   and call it from BOTH segment1-ball-hit and segment2-ball-hit.
-3) Make sure you compute cueCenterAtImpact correctly for segment2 (even if you use an epsilon start offset, keep it consistent with the tHit used).
-4) Run: .\mvnw.cmd test
-5) Print changed files + brief explanation.
+1) In PhysicsWorld / PocketModel.fromBounds(...), identify the current colliders:
+   - facingSegments
+   - jawArcs (likely full circles)
+   - shelfLines
+   Use P debug overlay in BilliardApp to visualize.
 
-Goal: end of 2nd yellow line on ball hit always spawns the white object-ball line.
+2) Fix geometry so colliders do NOT extend into the playable area:
+   - Ensure pocket centers (corner/side) are OUTSIDE the table bounds by ~pocketRadius (not on the rail line).
+   - Replace any "full circle jaw" collider with either:
+     (A) short arc segments near the mouth edges only, OR
+     (B) remove jaw circles entirely for now and rely on facingSegments (safer, minimal, still realistic enough).
+   - Ensure rail/cushion segments are CUT SHORT at the pocket mouth so there is an opening (no continuous rail through the pocket).
+
+3) Add an explicit collision filter:
+   - Define isInPocketMouthOpenRegion(ballCenter, pocketCenter, mouthRadius, ballRadius).
+   - If ball center is inside this open region, SKIP resolving collisions against pocket jaw/facing colliders that would block entry.
+   (Still allow shelf/capture checks.)
+
+   Minimal open-region test that works:
+   - if distance(ballCenter, pocketCenter) < (mouthRadius - ballRadius*0.25) => treat as inside open mouth => do not collide with jaw/facing.
+
+4) Keep captureCandidate(...) rule, but ensure it can actually be reached now that entry is possible.
+
+5) Run: .\mvnw.cmd test
+
+Output:
+- Changed files
+- Before/after explanation of why the old geometry blocked entry
+- The exact open-mouth collision skip rule used
 '@

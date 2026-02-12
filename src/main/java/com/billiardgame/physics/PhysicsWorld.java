@@ -6,6 +6,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class PhysicsWorld {
+    public enum BallPocketState {
+        ON_TABLE,
+        ENTERING_POCKET,
+        IN_POCKET,
+        REMOVED
+    }
+
     public enum MotionMode {
         SLIDING,
         ROLLING
@@ -241,38 +248,93 @@ public final class PhysicsWorld {
         return List.copyOf(out);
     }
 
+    public List<DebugSegment> pocketFacingSegmentsPx() {
+        List<DebugSegment> out = new ArrayList<>();
+        for (Segment2 s : pocketModel.facingSegments) {
+            out.add(new DebugSegment(toPixels(s.a), toPixels(s.b)));
+        }
+        return List.copyOf(out);
+    }
+
+    public List<DebugSegment> pocketShelfSegmentsPx() {
+        List<DebugSegment> out = new ArrayList<>();
+        for (ShelfLine s : pocketModel.shelfLines) {
+            out.add(new DebugSegment(toPixels(s.segment.a), toPixels(s.segment.b)));
+        }
+        return List.copyOf(out);
+    }
+
+    public BallPocketState ballPocketState(int index) {
+        return balls.get(index).pocketState;
+    }
+
+    public double ballPocketZ(int index) {
+        return balls.get(index).pocketZ;
+    }
+
+    public double ballRenderScale(int index) {
+        BallBody body = balls.get(index);
+        if (body.pocketState == BallPocketState.ON_TABLE) {
+            return 1.0;
+        }
+        return Math.max(0.35, 1.0 - (body.pocketZ / (body.radius * 2.8)));
+    }
+
+    public double ballRenderAlpha(int index) {
+        BallBody body = balls.get(index);
+        if (body.pocketState == BallPocketState.ON_TABLE) {
+            return 1.0;
+        }
+        return Math.max(0.10, 1.0 - (body.pocketZ / (body.radius * 2.1)));
+    }
+
     public void step(double dtSeconds) {
         if (dtSeconds <= 0) {
             throw new IllegalArgumentException("dtSeconds must be positive");
         }
 
         for (BallBody ballBody : balls) {
+            if (ballBody.pocketState != BallPocketState.ON_TABLE) {
+                continue;
+            }
             ballBody.position = ballBody.position.add(ballBody.velocity.mul(dtSeconds));
             resolveRailCollision(ballBody);
         }
 
         resolveBallCollisions();
         for (BallBody ballBody : balls) {
+            if (ballBody.pocketState != BallPocketState.ON_TABLE) {
+                continue;
+            }
             resolveRailCollision(ballBody);
+            resolvePocketSurfaceCollision(ballBody);
         }
 
         for (BallBody ballBody : balls) {
+            if (ballBody.pocketState == BallPocketState.REMOVED) {
+                continue;
+            }
+            if (ballBody.pocketState != BallPocketState.ON_TABLE) {
+                updatePocketState(ballBody, dtSeconds);
+                continue;
+            }
             double pocketDamping = pocketModel.captureApproachDamping(ballBody.position, ballBody.radius, dtSeconds);
             if (pocketDamping < 1.0) {
                 ballBody.velocity = ballBody.velocity.mul(pocketDamping);
             }
             applyClothInteraction(ballBody, dtSeconds);
             integrateOrientation(ballBody, dtSeconds);
+            PocketCapture capture = pocketModel.captureCandidate(ballBody.position, ballBody.radius);
+            if (capture != null) {
+                ballBody.pocketState = BallPocketState.ENTERING_POCKET;
+                ballBody.pocketCenter = capture.center;
+                ballBody.velocity = ballBody.velocity.mul(0.35);
+                ballBody.angularVelocity = ballBody.angularVelocity.mul(0.60);
+                ballBody.pocketTimer = 0.0;
+            }
         }
 
-        balls.removeIf(body -> {
-            if (!isPotted(body)) {
-                return false;
-            }
-            body.velocity = Vector2.ZERO;
-            body.angularVelocity = Vector3.ZERO;
-            return true;
-        });
+        balls.removeIf(body -> body.pocketState == BallPocketState.REMOVED);
     }
 
     private void resolveRailCollision(BallBody ballBody) {
@@ -442,8 +504,84 @@ public final class PhysicsWorld {
         );
     }
 
-    private boolean isPotted(BallBody body) {
-        return pocketModel.isPotted(body.position, body.radius);
+    private void resolvePocketSurfaceCollision(BallBody body) {
+        if (pocketModel.isInPocketMouthOpenRegion(body.position, body.radius)) {
+            return;
+        }
+        for (Segment2 s : pocketModel.facingSegments) {
+            CollisionContact c = segmentCollision(body.position, body.radius, s);
+            if (c == null) {
+                continue;
+            }
+            body.position = body.position.add(c.normal.mul(c.penetration + 1e-6));
+            applySurfaceImpulse(body, c.normal, PhysicsConfig.POCKET_JAW_RESTITUTION, PhysicsConfig.POCKET_JAW_FRICTION);
+        }
+    }
+
+    private static CollisionContact segmentCollision(Vector2 center, double radius, Segment2 seg) {
+        Vector2 ab = seg.b.sub(seg.a);
+        double abLenSq = ab.lengthSq();
+        if (abLenSq <= 1e-12) {
+            return null;
+        }
+        double t = dot(center.sub(seg.a), ab) / abLenSq;
+        t = Math.max(0.0, Math.min(1.0, t));
+        Vector2 closest = seg.a.add(ab.mul(t));
+        Vector2 delta = center.sub(closest);
+        double dist = delta.length();
+        if (dist >= radius || dist <= 1e-12) {
+            return null;
+        }
+        Vector2 normal = delta.mul(1.0 / dist);
+        return new CollisionContact(normal, radius - dist);
+    }
+
+    private void applySurfaceImpulse(BallBody body, Vector2 normal, double restitution, double friction) {
+        Vector2 n = normal.normalized();
+        Vector2 t = new Vector2(-n.y(), n.x());
+        Vector3 r = new Vector3(-n.x() * body.radius, -n.y() * body.radius, 0.0);
+        Vector3 vContact3 = toVec3(body.velocity).add(cross(body.angularVelocity, r));
+        Vector2 vContact = new Vector2(vContact3.x(), vContact3.y());
+        double vn = dot(vContact, n);
+        if (vn >= 0.0) {
+            return;
+        }
+        double invMass = 1.0 / body.mass;
+        double invI = 1.0 / inertia(body.mass, body.radius);
+        Vector3 n3 = toVec3(n);
+        Vector3 t3 = toVec3(t);
+        double kN = invMass + cross(r, n3).lengthSq() * invI;
+        double jn = -(1.0 + restitution) * vn / kN;
+        double vt = dot(vContact, t);
+        double jt = 0.0;
+        if (Math.abs(vt) > PhysicsConfig.BALL_COLLISION_TANGENTIAL_EPS_M_PER_S) {
+            double kT = invMass + cross(r, t3).lengthSq() * invI;
+            double jtUnclamped = -vt / kT;
+            double jtMax = friction * jn;
+            jt = Math.max(-jtMax, Math.min(jtMax, jtUnclamped));
+        }
+        Vector3 impulse = n3.mul(jn).add(t3.mul(jt));
+        applyImpulse(body, impulse, r);
+    }
+
+    private void updatePocketState(BallBody body, double dtSeconds) {
+        body.pocketTimer += dtSeconds;
+        if (body.pocketCenter != null) {
+            Vector2 toCenter = body.pocketCenter.sub(body.position);
+            body.position = body.position.add(toCenter.mul(Math.min(1.0, dtSeconds * 8.0)));
+        }
+        double linerDamping = 6.5 + (PhysicsConfig.POCKET_LINER_FRICTION * 7.0);
+        double spinDamping = 6.5 + (PhysicsConfig.POCKET_LINER_FRICTION * 8.0);
+        body.velocity = body.velocity.mul(Math.max(0.0, 1.0 - linerDamping * dtSeconds));
+        body.angularVelocity = body.angularVelocity.mul(Math.max(0.0, 1.0 - spinDamping * dtSeconds));
+        body.velocity = body.velocity.mul(PhysicsConfig.POCKET_LINER_RESTITUTION);
+        body.pocketZ += (body.radius * 3.0) * dtSeconds;
+        if (body.pocketState == BallPocketState.ENTERING_POCKET && body.pocketTimer >= 0.10) {
+            body.pocketState = BallPocketState.IN_POCKET;
+        }
+        if (body.pocketTimer >= 0.45) {
+            body.pocketState = BallPocketState.REMOVED;
+        }
     }
 
     private void applyClothInteraction(BallBody ballBody, double dtSeconds) {
@@ -575,6 +713,10 @@ public final class PhysicsWorld {
         private final double radius;
         private final double mass;
         private MotionMode mode;
+        private BallPocketState pocketState;
+        private Vector2 pocketCenter;
+        private double pocketZ;
+        private double pocketTimer;
 
         private BallBody(Vector2 position, Vector2 velocity, Vector3 angularVelocity, double radius, double mass) {
             this.position = position;
@@ -584,6 +726,10 @@ public final class PhysicsWorld {
             this.radius = radius;
             this.mass = mass;
             this.mode = MotionMode.SLIDING;
+            this.pocketState = BallPocketState.ON_TABLE;
+            this.pocketCenter = null;
+            this.pocketZ = 0.0;
+            this.pocketTimer = 0.0;
         }
     }
 
@@ -609,6 +755,60 @@ public final class PhysicsWorld {
             this.startDeg = startDeg;
             this.sweepDeg = sweepDeg;
         }
+
+        private boolean containsAngle(double angleDeg) {
+            double a = normalizeDeg(angleDeg);
+            double start = normalizeDeg(startDeg);
+            double end = normalizeDeg(startDeg + sweepDeg);
+            if (sweepDeg >= 0) {
+                if (start <= end) {
+                    return a >= start && a <= end;
+                }
+                return a >= start || a <= end;
+            }
+            if (end <= start) {
+                return a <= start && a >= end;
+            }
+            return a <= start || a >= end;
+        }
+    }
+
+    private static final class ShelfLine {
+        private final Segment2 segment;
+        private final Vector2 inTableNormal;
+
+        private ShelfLine(Segment2 segment, Vector2 inTableNormal) {
+            this.segment = segment;
+            this.inTableNormal = inTableNormal.normalized();
+        }
+    }
+
+    private static final class PocketCapture {
+        private final Vector2 center;
+
+        private PocketCapture(Vector2 center) {
+            this.center = center;
+        }
+    }
+
+    private static final class PocketRegion {
+        private final Vector2 center;
+        private final double radius;
+
+        private PocketRegion(Vector2 center, double radius) {
+            this.center = center;
+            this.radius = radius;
+        }
+    }
+
+    private static final class CollisionContact {
+        private final Vector2 normal;
+        private final double penetration;
+
+        private CollisionContact(Vector2 normal, double penetration) {
+            this.normal = normal;
+            this.penetration = penetration;
+        }
     }
 
     private static final class PocketModel {
@@ -621,9 +821,12 @@ public final class PhysicsWorld {
         private final double cornerMouth;
         private final double dropDepth;
         private final List<Segment2> mouthSegments;
+        private final List<Segment2> facingSegments;
+        private final List<ShelfLine> shelfLines;
         private final List<ArcJaw> jawArcs;
+        private final List<PocketRegion> pocketRegions;
 
-        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<Segment2> mouthSegments, List<ArcJaw> jawArcs) {
+        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<Segment2> mouthSegments, List<Segment2> facingSegments, List<ShelfLine> shelfLines, List<ArcJaw> jawArcs, List<PocketRegion> pocketRegions) {
             this.left = left;
             this.right = right;
             this.top = top;
@@ -633,7 +836,10 @@ public final class PhysicsWorld {
             this.cornerMouth = cornerMouth;
             this.dropDepth = dropDepth;
             this.mouthSegments = mouthSegments;
+            this.facingSegments = facingSegments;
+            this.shelfLines = shelfLines;
             this.jawArcs = jawArcs;
+            this.pocketRegions = pocketRegions;
         }
 
         private static PocketModel fromBounds(TableBounds b, double ballRadius) {
@@ -646,6 +852,8 @@ public final class PhysicsWorld {
             double cornerMouth = ballRadius * PhysicsConfig.POCKET_CORNER_MOUTH_MULTIPLIER;
             double dropDepth = ballRadius * PhysicsConfig.POCKET_DROP_DEPTH_MULTIPLIER;
             double jawR = ballRadius * PhysicsConfig.POCKET_JAW_RADIUS_MULTIPLIER;
+            double cornerCenterOffset = cornerMouth;
+            double sideCenterOffset = mouthHalf;
 
             List<Segment2> segs = new ArrayList<>();
             segs.add(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(cx - mouthHalf, top)));
@@ -654,6 +862,24 @@ public final class PhysicsWorld {
             segs.add(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(right - cornerMouth, bottom)));
             segs.add(new Segment2(new Vector2(left, top + cornerMouth), new Vector2(left, bottom - cornerMouth)));
             segs.add(new Segment2(new Vector2(right, top + cornerMouth), new Vector2(right, bottom - cornerMouth)));
+
+            List<Segment2> facings = new ArrayList<>();
+            facings.add(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(left + dropDepth, top + cornerMouth)));
+            facings.add(new Segment2(new Vector2(right - cornerMouth, top), new Vector2(right - dropDepth, top + cornerMouth)));
+            facings.add(new Segment2(new Vector2(left + cornerMouth, bottom), new Vector2(left + dropDepth, bottom - cornerMouth)));
+            facings.add(new Segment2(new Vector2(right - cornerMouth, bottom), new Vector2(right - dropDepth, bottom - cornerMouth)));
+            facings.add(new Segment2(new Vector2(cx - mouthHalf, top), new Vector2(cx - mouthHalf, top + dropDepth)));
+            facings.add(new Segment2(new Vector2(cx + mouthHalf, top), new Vector2(cx + mouthHalf, top + dropDepth)));
+            facings.add(new Segment2(new Vector2(cx - mouthHalf, bottom), new Vector2(cx - mouthHalf, bottom - dropDepth)));
+            facings.add(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(cx + mouthHalf, bottom - dropDepth)));
+
+            List<ShelfLine> shelves = new ArrayList<>();
+            shelves.add(new ShelfLine(new Segment2(new Vector2(left + cornerMouth, top + dropDepth), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
+            shelves.add(new ShelfLine(new Segment2(new Vector2(right - cornerMouth, top + dropDepth), new Vector2(right - dropDepth, top + cornerMouth)), new Vector2(-1, 1)));
+            shelves.add(new ShelfLine(new Segment2(new Vector2(left + cornerMouth, bottom - dropDepth), new Vector2(left + dropDepth, bottom - cornerMouth)), new Vector2(1, -1)));
+            shelves.add(new ShelfLine(new Segment2(new Vector2(right - cornerMouth, bottom - dropDepth), new Vector2(right - dropDepth, bottom - cornerMouth)), new Vector2(-1, -1)));
+            shelves.add(new ShelfLine(new Segment2(new Vector2(cx - mouthHalf, top + dropDepth), new Vector2(cx + mouthHalf, top + dropDepth)), new Vector2(0, 1)));
+            shelves.add(new ShelfLine(new Segment2(new Vector2(cx - mouthHalf, bottom - dropDepth), new Vector2(cx + mouthHalf, bottom - dropDepth)), new Vector2(0, -1)));
 
             List<ArcJaw> jaws = new ArrayList<>();
             jaws.add(new ArcJaw(new Vector2(left + cornerMouth, top + jawR), jawR, 180, 90));
@@ -669,7 +895,15 @@ public final class PhysicsWorld {
             jaws.add(new ArcJaw(new Vector2(cx - mouthHalf, bottom - jawR), jawR, 90, 90));
             jaws.add(new ArcJaw(new Vector2(cx + mouthHalf, bottom - jawR), jawR, 0, 90));
 
-            return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(jaws));
+            List<PocketRegion> regions = new ArrayList<>();
+            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, top - cornerCenterOffset), cornerMouth));
+            regions.add(new PocketRegion(new Vector2(cx, top - sideCenterOffset), mouthHalf));
+            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, top - cornerCenterOffset), cornerMouth));
+            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth));
+            regions.add(new PocketRegion(new Vector2(cx, bottom + sideCenterOffset), mouthHalf));
+            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth));
+
+            return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(facings), List.copyOf(shelves), List.copyOf(jaws), List.copyOf(regions));
         }
 
         private boolean inTopOpening(double x) {
@@ -688,24 +922,25 @@ public final class PhysicsWorld {
             return inLeftOpening(y);
         }
 
-        private boolean isPotted(Vector2 p, double ballRadius) {
-            return isPottedAt(p, ballRadius, new Vector2(left, top), cornerMouth)
-                    || isPottedAt(p, ballRadius, new Vector2(cx, top), mouthHalf)
-                    || isPottedAt(p, ballRadius, new Vector2(right, top), cornerMouth)
-                    || isPottedAt(p, ballRadius, new Vector2(left, bottom), cornerMouth)
-                    || isPottedAt(p, ballRadius, new Vector2(cx, bottom), mouthHalf)
-                    || isPottedAt(p, ballRadius, new Vector2(right, bottom), cornerMouth);
-        }
-
         private double captureApproachDamping(Vector2 p, double ballRadius, double dtSeconds) {
             double damping = 1.0;
-            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(left, top), cornerMouth));
-            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(cx, top), mouthHalf));
-            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(right, top), cornerMouth));
-            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(left, bottom), cornerMouth));
-            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(cx, bottom), mouthHalf));
-            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(right, bottom), cornerMouth));
+            for (PocketRegion region : pocketRegions) {
+                damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, region.center, region.radius));
+            }
             return damping;
+        }
+
+        private boolean isInPocketMouthOpenRegion(Vector2 p, double ballRadius) {
+            for (PocketRegion region : pocketRegions) {
+                double openMouthRadius = region.radius - (ballRadius * 0.25);
+                if (openMouthRadius <= 0.0) {
+                    continue;
+                }
+                if (p.sub(region.center).length() < openMouthRadius) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private boolean isPottedAt(Vector2 p, double ballRadius, Vector2 center, double pocketRadius) {
@@ -714,6 +949,58 @@ public final class PhysicsWorld {
                 return false;
             }
             return p.sub(center).length() <= captureRadius;
+        }
+
+        private PocketCapture captureCandidate(Vector2 p, double ballRadius) {
+            double margin = ballRadius * PhysicsConfig.POCKET_CAPTURE_LIP_MARGIN;
+            for (ShelfLine line : shelfLines) {
+                Vector2 ab = line.segment.b.sub(line.segment.a);
+                double abLenSq = ab.lengthSq();
+                if (abLenSq <= 1e-12) {
+                    continue;
+                }
+                double t = dot(p.sub(line.segment.a), ab) / abLenSq;
+                if (t < 0.0 || t > 1.0) {
+                    continue;
+                }
+                Vector2 onSeg = line.segment.a.add(ab.mul(t));
+                double signed = dot(p.sub(onSeg), line.inTableNormal);
+                if (signed >= -margin) {
+                    continue;
+                }
+                Vector2 pc = closestPocketCenter(p);
+                if (pc == null) {
+                    continue;
+                }
+                double pocketRadius = pocketRadiusForCenter(pc);
+                if (!isPottedAt(p, ballRadius, pc, pocketRadius)) {
+                    continue;
+                }
+                return new PocketCapture(pc);
+            }
+            return null;
+        }
+
+        private Vector2 closestPocketCenter(Vector2 p) {
+            Vector2 best = null;
+            double bestD = Double.POSITIVE_INFINITY;
+            for (PocketRegion region : pocketRegions) {
+                double d = p.sub(region.center).lengthSq();
+                if (d < bestD) {
+                    bestD = d;
+                    best = region.center;
+                }
+            }
+            return best;
+        }
+
+        private double pocketRadiusForCenter(Vector2 center) {
+            for (PocketRegion region : pocketRegions) {
+                if (region.center.sub(center).lengthSq() <= 1e-12) {
+                    return region.radius;
+                }
+            }
+            return mouthHalf;
         }
 
         private double approachDampingAt(Vector2 p, double ballRadius, double dtSeconds, Vector2 center, double pocketRadius) {
@@ -729,5 +1016,13 @@ public final class PhysicsWorld {
             double dampingRate = PhysicsConfig.POCKET_APPROACH_DAMPING_RATE * depth;
             return Math.max(0.0, 1.0 - (dampingRate * dtSeconds));
         }
+    }
+
+    private static double normalizeDeg(double deg) {
+        double out = deg % 360.0;
+        if (out < 0) {
+            out += 360.0;
+        }
+        return out;
     }
 }

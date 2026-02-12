@@ -1,0 +1,366 @@
+# Physics of Ball–Pocket Interactions in Pool and Related Cue Sports
+
+## Executive summary
+
+Pocket behavior is not a single “pocketed vs not” event; it is a **hybrid dynamical system** in which a ball transitions through **geometric gates** (mouth, shelf/fall line, throat) while undergoing **rapid, frictional multi-contact** with pocket points (jaw facings), short rails near the pocket, slate bevels, and pocket liners—under gravity. Official specifications constrain the most load‑bearing geometric variables (mouth width, shelf depth, cut angles, vertical pocket angle/back draft, facing thickness/materials), and experiments/technical measurements show that **approach angle, speed, and spin** strongly change the effective acceptance region: slower “pocket speed” shots can be accepted at angles/situations where faster shots rattle out. citeturn2search0turn2search1turn9view0turn9view1
+
+A simulation that aims to reproduce **bounce in/out, rim hangs, rattles, jams, grazes, lip-scrapes, liner rebounds, and partial entry/escape** needs three things:
+
+- **A faithful geometric model** of each pocket: mouth line/plane, shelf (fall line where the slate bevel begins), jaw/facing surfaces, vertical pocket angle, and liner/boot surfaces. WPA publishes recommended pocket dimensions and liner requirements; BCA specs provide alternative ranges and measurement definitions (including shelf measurement). citeturn2search0turn2search1  
+- **A contact solver that handles multi-contact sequences** robustly (jaw–jaw–jaw “rattle,” simultaneous dual-jaw “jam”), either as (A) **event-driven TOI + impulses** or (B) a **compliant contact model** (Hertz-like normal + tangential compliance capped by Coulomb friction). Multi-impact modeling is a known numerical difficulty; state-transition approaches and smooth multi-impact models illustrate why naive sequential impulses can be unstable in tight geometries like pockets. citeturn1search22turn3search23turn10search0  
+- **Spin-aware tangential coupling** at every pocket contact: the tangential relative velocity at the contact point depends on both translation and rotation; the resulting friction impulse/force can either **steer the ball into the pocket** (spin-assisted pocketing) or **kick it out** (lip-scrape rebound, rattle-out). citeturn10search0turn3search1turn9view0  
+
+Unspecified elements (exact table model, pocket template, cloth and cleanliness condition) are treated as **no specific constraint**; the report therefore provides **default ranges** and emphasizes **calibration protocols** (high-speed video + trajectory/spin reconstruction) to fit pocket-specific parameters. citeturn2search0turn9view1turn3search6
+
+## Pocket geometry and representations
+
+Pocketing outcomes are geometry-dominated. The same physics (ball mass, cloth friction) will feel dramatically different if the pocket has a deeper shelf or different jaw angles, because the ball must travel farther inside the jaws before gravity can “win” and drop the ball. WPA explicitly defines pocket-relevant dimensions and components (mouth sizes, shelf ranges, cut angles, vertical pocket angle, facings thickness, and liner/boot requirements). citeturn2search0turn2search1
+
+image_group{"layout":"carousel","aspect_ratio":"16:9","query":["WPA pool table pocket shelf depth diagram mouth line fall line","BCA equipment specifications pocket shelf measurement diagram","corner pocket cut angle 142 degrees diagram pool","snooker pocket template diagram WPBSA"],"num_per_query":1}
+
+### Geometry primitives you should explicitly model
+
+**Mouth line and mouth plane (gate 1).**  
+Specs define “mouth” as the opening between cushion noses where the rail changes direction into the pocket; both WPA and BCA provide mouth size ranges (corner vs side differ). citeturn2search0turn2search1  
+Implementation: represent the mouth opening in 2D (table plane) as a polygonal/curvilinear aperture. For state logic, define a **mouth plane** as the vertical extrusion of the mouth line; it distinguishes “outside pocket” vs “entered mouth region.”
+
+**Shelf / fall line / slate-lip edge (gate 2).**  
+WPA defines *shelf* as a distance from the mouth line to the *vertical cut of the slate pocket cut* (shelf includes bevel) and provides shelf ranges for corner and side pockets; BCA defines shelf measurement similarly (with slightly different ranges in their equipment document). citeturn2search0turn2search1  
+Implementation: represent a second inward boundary—the **shelf boundary**—as a curve/polygon in the table plane (or as the vertical projection of the slate-lip edge). A ball is not physically “committed” until its center passes a geometry-dependent point where gravity and available support contacts force descent; the shelf boundary is a practical approximation to that commitment line. citeturn2search0turn9view2
+
+**Jaw/facing surfaces (dominant rebound & rattle site).**  
+WPA requires pocket jaw facings of reinforced rubber; facings must be symmetric left/right, within thickness limits, and “somewhat harder” than the cushions. This matters because facing stiffness and thickness strongly affect how much energy is absorbed vs returned on a jaw hit—central to rattle-outs and lip bounces. citeturn2search0turn2search8
+
+**Vertical pocket angle / back draft (controls “spit back” tendency).**  
+Both WPA and BCA specify vertical pocket angles (12°–15°). Larger back draft tends to guide balls downward rather than reflect them back toward the bed. citeturn2search0turn2search1
+
+**Liners and boots (dissipative funnel).**  
+WPA specifies that liners/boots should be plastic, rubber, or leather; should not stain balls/cues; the upper inner wall must be shaped so that when struck below the rim it directs a ball downward; and ball returns should not bounce balls back onto the table. These requirements imply that inside-pocket surfaces are intentionally “energy-killing” compared with cushions. citeturn2search0
+
+### Representing pocket geometry in a physics engine
+
+**Analytic surfaces (planes/cylinders/fillets/cones).**  
+Pros: fast contact queries; exact normals; stable TOI for sphere–plane/cylinder/cone.  
+Cons: hard to match real pocket shapes (jaw rounding, liners) unless you build a careful parametric model.
+
+**Triangle meshes.**  
+Pros: matches scanned/CAD pocket shapes; easy authoring.  
+Cons: TOI against moving spheres is harder; collision normals can be noisy; requires robust CCD and contact manifold building to avoid “triangle snagging.” Impulse-based methods are sensitive to poor normals in tight pockets. citeturn10search0turn10search1
+
+**Signed-distance fields (SDFs) / distance queries (recommended when pockets are complex).**  
+Pros: smooth normals if you use a well-constructed SDF; works with arbitrary shapes; can support conservative advancement.  
+Cons: higher compute/memory; building a high-quality SDF for thin rails/lips requires care.
+
+A practical approach used in at least one physically-based billiards simulation workflow is to approximate pocket-adjacent rails as a **set of line segments** (in 2D) and perform collision calculations on the **ball center trajectory** with a radius offset (Minkowski sum idea). This is especially useful near pockets where the rail is not a single straight boundary. citeturn4view0
+
+## Classification of pocket-interaction modes with implementable criteria
+
+The following taxonomy is organized by a **state-machine view**: a ball moves from free motion on cloth into mouth proximity, then possibly into partial entry, then either captures (descends) or escapes (returns). The individual “modes” are different **contact sequences** and **energy/spin states** within that funnel. Multi-contact in a pocket is conceptually similar to multi-point impacts studied in rigid-body impact theory; the difference is that pocket geometry makes rapid alternations common. citeturn1search22turn10search0
+
+image_group{"layout":"carousel","aspect_ratio":"16:9","query":["pool corner pocket rattle slow motion","pool ball hanging on pocket rim photo","pool ball rattles out of corner pocket diagram","pool ball lip out pocket jaw contact"],"num_per_query":1}
+
+### Common detection primitives (used in every mode)
+
+Let the ball center be \(\mathbf{x}\), radius \(R\), linear velocity \(\mathbf{v}\), angular velocity \(\boldsymbol{\omega}\). For any pocket surface \(S\) with outward unit normal \(\mathbf{n}\) at closest point \(\mathbf{p}\):
+
+- **Signed distance** (sphere to surface): \(\phi = d(\mathbf{x},S) - R\). Contact when \(\phi \le \varepsilon_p\).  
+- **Normal relative velocity** at contact point:  
+  \[
+  v_n = \left(\mathbf{v} + \boldsymbol{\omega}\times(\mathbf{p}-\mathbf{x})\right)\cdot \mathbf{n}
+  \]
+- **Tangential slip velocity** at contact:
+  \[
+  \mathbf{v}_t = \left(\mathbf{v} + \boldsymbol{\omega}\times(\mathbf{p}-\mathbf{x})\right) - v_n\mathbf{n}
+  \]
+These are standard rigid-body contact kinematics for impulse-based simulation. citeturn10search0turn10search1
+
+**Geometric gates (2D, in the table plane)**  
+Define two closed regions per pocket:
+
+- \(A_{\text{mouth}}\): mouth aperture region in the table plane.  
+- \(A_{\text{shelf}}\): shelf/fall-line aperture region (typically “deeper” and often narrower in effective clearance).
+
+Then for a sphere we use a dilation by radius \(R\): a center is “inside” if it lies within the **configuration-space aperture** \(A \ominus R\) (equivalently, check whether the 2D distance from the center to the aperture boundary exceeds \(R\)). This corresponds to the common “offset the boundary by one radius” trick described in event-based billiards simulation settings. citeturn4view0turn2search0
+
+### Mode catalog with mechanisms, criteria, response, and sensitivities
+
+The table below enumerates the modes you named and the physics they correspond to. Items labeled **(emergent)** are best treated as natural outcomes of the same contact model rather than hard-coded special cases; nevertheless, each includes **detection criteria** you can use for classification/telemetry and for preventing false captures.
+
+**Table: pocket interaction modes and implementable handling**
+
+| Mode (your list) | Physical mechanism | Detection/Classification criteria (ready-to-implement) | Response algorithm choices | Highest-sensitivity parameters |
+|---|---|---|---|---|
+| Roll in / slide in | Ball crosses mouth then traverses shelf and begins descending with limited jaw contact | Entered \(A_{\text{mouth}}\) and then \(A_{\text{shelf}}\) with \(\|\mathbf{v}\|\) small; classify **slide vs roll** via cloth slip \( \|\mathbf{u}\| = \|\mathbf{v} + \boldsymbol{\omega}\times(-R\hat{z})\| \) (sliding if \(>\varepsilon_u\)) citeturn3search1turn4view0 | Usually **event-driven TOI + impulses** is enough; inside pocket use continuous contact + damping | Shelf depth (corner 1″–2¼″; side 0–0.375″ WPA), pocket angle, liner damping/friction citeturn2search0 |
+| Rattle (jaw–jaw oscillation) | Alternating impacts with left/right facings; energy loss depends on facing stiffness, restitution, and tangential friction/spin; fast shots “see” effectively smaller pockets | Sequence of ≥2 jaw contacts within short time \(T_r\) (e.g., 50–200 ms), with alternating contact normals; ball center remains outside \(A_{\text{shelf}}\) during most impacts; high approach speed correlates with reduced effective target size citeturn9view1turn9view0 | Use **multi-impact robust handling**: (A) TOI loop + impulse iterations until separation; or (B) simultaneous-contact solver (PGS) to avoid energy injection citeturn1search22turn10search1 | Facing thickness/material (WPA limits), restitution at jaws, ball–jaw friction; shot speed strongly affects acceptance citeturn2search0turn9view1 |
+| Bounce in and out (spit) | Ball enters mouth, strikes far jaw/liner/slate bevel and rebounds outward before crossing shelf; often at high speed or with unfavorable vertical angle | Crossed mouth plane, then sees contact impulse with outward post-collision velocity component: \((\mathbf{v}^+\cdot \hat{o})>v_{\text{out}}\), and center exits \(A_{\text{mouth}}\) within \(T_{\text{bounce}}\) | Impulse with restitution and friction at jaw/liner; if liners are too elastic, unrealistic spit-backs violate WPA intent that inside walls direct downward citeturn2search0turn10search0 | Liner restitution (should be low), vertical pocket angle 12°–15°, jaw restitution, approach speed citeturn2search0turn2search1 |
+| Hang on rim / “hanger” (emergent) | Ball settles in a static equilibrium supported by shelf/bevel and one or two jaw contacts; gravity is balanced by contact normals + static friction | After entering mouth, speed drops below \(v_{\text{hang}}\) and contact manifold includes rim/bevel and jaw(s); classify as “hanger” if (i) COM is above support polygon of contact points and (ii) solver finds a feasible static friction solution with \(\|\mathbf{v}\|,\|\boldsymbol{\omega}\|\approx 0\) citeturn10search1turn10search0 | Better with a **resting-contact constraint solver** (PGS/MLCP) than pure impulses; impulses-only may jitter | Shelf depth and bevel shape, static friction at rim/liner, facing geometry and thickness citeturn2search0turn2search8 |
+| Jam (wedge) | Simultaneous contact with both jaws (and possibly rim), producing a wedged state; can occur at low speed or with slightly oversized ball/undersized throat | Detect two jaw contacts active with opposing normals, penetration small but persistent; relative motion constrained; solver indicates sticking with high normal forces | Requires **simultaneous contact resolution** (state-transition or smooth multi-impact) to avoid alternating impulses “exploding” energies citeturn1search22turn3search23 | Jaw angle and throat geometry; ball radius tolerance; friction; contact slop \(\varepsilon_p\) (too large can create false jams) citeturn2search0turn10search1 |
+| Graze / skim at point | Near-tangent collision with a pocket point; slight deflection; may impart/alter spin due to tangential friction impulse | Small penetration, short contact duration, \(|v_n| \ll \|\mathbf{v}_t\|\) at jaw; classify by impact angle \( \cos^{-1}\left(\frac{-v_n}{\|\mathbf{v}_{rel}\|}\right) \) near 90° | Impulse with Coulomb friction; ensure CCD so you don’t miss grazing contacts at high speed citeturn10search0turn10search1 | Jaw curvature approximation (mesh vs analytic), friction coefficient, CCD tolerance |
+| Lip-scrape (rim/bevel slide) | Sliding contact along bevel/upper lip; friction reduces speed and changes spin axis; can either help drop or eject depending on geometry and velocity direction | Persistent contact with bevel surface, with tangential slip \(\|\mathbf{v}_t\|>0\) and \(v_n\approx 0\) (constraint contact). Often occurs near shelf boundary | Use continuous contact (constraint + friction) rather than repeated impulses; if using impulses, substep heavily to approximate sliding along a curve citeturn10search1turn10search0 | Bevel shape, static/kinetic friction on slate/liner, timestep and solver iterations |
+| Partial entry and escape | Ball crosses mouth plane but fails to traverse shelf boundary; after jaw/rail contacts, it returns to table | State when \(\mathbf{x}\in A_{\text{mouth}}\) but \(\mathbf{x}\notin A_{\text{shelf}}\); escape when center crosses outward through mouth plane with outward component \((\mathbf{v}\cdot \hat{o})>0\) and is not blocked by offset geometry | Let physics decide; for classification log the max inward depth and number of jaw contacts; do not “auto-capture” before shelf is crossed citeturn2search0turn9view2 | Shelf depth; jaw restitution/friction; speed; facing thickness; capture logic hysteresis (to avoid false captures) |
+| Spin-assisted pocketing | Spin changes tangential relative velocity at jaw/liner contact, producing frictional impulses that steer ball inward and/or reduce rebound energy; “follow” can help on the second jaw and over the brink at pocket speed | Detect nonzero \(\boldsymbol{\omega}\) and large \(\|\mathbf{v}_t\|\) at jaw/liner contacts; correlate acceptance with reduced effective opening at higher speed and with follow aiding softer shots citeturn9view0turn9view1 | Impulse model naturally captures spin steering if \(J_t\) is computed from contact-point kinematics; compliant model captures longer-duration steering | Ball–jaw friction; spin magnitude; shot speed; shelf depth; liner slope. Jewett reports soft shots fall more often partly because follow carries them to a better second-jaw contact and helps over the brink citeturn9view0 |
+| Bounce off liner (inside pocket) | Ball descends, hits liner/boot, may rebound; should usually be directed downward rather than back onto table | Within cavity (below bed plane), impact with liner surface; classify rebound risk if post-collision vertical velocity \(v_z^+>0\) and path intersects mouth region again | Use dissipative liner params; WPA intent: inner wall fashioned to direct downward; returns should not bounce balls onto table citeturn2search0 | Liner restitution and damping; liner slope; friction |
+| Jump into pocket | Ball is airborne due to cue elevation or rail hop; enters pocket without following cloth path | \(z>0\), ballistic trajectory intersects mouth aperture; detect TOI vs rim and pocket cavity surfaces (3D CCD) | Use 3D rigid-body + gravity; CCD mandatory at break/jump speeds to avoid tunneling | Pocket rim geometry; CCD; timestep; restitution on rim impacts |
+| Bank into pocket | Ball banks off cushion/short-rail near pocket then enters; pocket interaction is subsequent | Detect cushion collision near pocket, then apply normal pocket gate logic | Standard cushion impulses plus pocket logic; note near-pocket rail segments differ from long rails in realistic tables citeturn4view0turn2search0 | Short-rail geometry near pocket; cushion restitution/friction; pocket angles |
+| Double-hit near pocket | Rapid sequence: jaw hit then ball–ball or rail hit (or vice-versa) in pocket neighborhood; needs correct ordering and TOI | Detect multiple events within small time window; classify by minimal TOIs; collisions may be near-simultaneous | Use event-driven TOI loop; multi-impact solvers help if near-simultaneous | CCD robustness; event ordering tolerance \(\varepsilon_t\); solver iteration count |
+
+**Key empirical/technical observation for acceptance modeling:** measured “effective pocket target size” decreases at higher shot speeds and with large approach angles, especially for side pockets; pocket-speed (soft) shots can have materially larger accept/reject margins than hard shots. citeturn9view1turn9view0
+
+## Collision/contact response in pockets and derived equations for cavity dynamics
+
+Pocket dynamics differs from free-table motion mainly because of (i) **gravity-driven descent**, (ii) frequent **multi-surface contact**, and (iii) deliberately dissipative interior materials (liners/boots). WPA requirements about liner shaping and preventing ball return “bounce-outs” motivate choosing **low restitution + high damping** for liner contacts compared with rails. citeturn2search0
+
+### Equations of motion inside the pocket cavity
+
+Treat the ball as a rigid sphere under gravity and contact forces:
+
+\[
+m\dot{\mathbf{v}} = m\mathbf{g} + \sum_k \mathbf{F}_{c,k}, \qquad
+I\dot{\boldsymbol{\omega}} = \sum_k (\mathbf{r}_k \times \mathbf{F}_{c,k})
+\]
+
+with \(I=\tfrac{2}{5}mR^2\) for a homogeneous sphere. citeturn10search0
+
+Inside a pocket there can be multiple simultaneous contacts \(k\) with jaw faces, bevel surfaces, liners, and the pocket bottom. Multi-contact handling is a central issue in rigid-body simulation; iterative constraint solvers and impact-space state-transition formulations are common ways to avoid instability. citeturn10search1turn1search22turn3search23
+
+### Impulse-based contact (fast, practical)
+
+For each contact with normal \(\mathbf{n}\), contact point \(\mathbf{p}\), define \(\mathbf{r}=\mathbf{p}-\mathbf{x}\) and relative contact velocity \(\mathbf{v}_c=\mathbf{v}+\boldsymbol{\omega}\times\mathbf{r}\).
+
+**Normal impulse** (Newton restitution):
+\[
+J_n = -(1+e)\,\frac{v_n}{\frac{1}{m} + \mathbf{n}\cdot\left(I^{-1}(\mathbf{r}\times\mathbf{n})\times\mathbf{r}\right)}
+\quad\text{for } v_n<0
+\]
+**Tangential friction impulse** (Coulomb cap):
+\[
+\mathbf{t}=\frac{\mathbf{v}_t}{\|\mathbf{v}_t\|+\varepsilon_t},\qquad
+J_t^\* = -\frac{\mathbf{v}_t\cdot\mathbf{t}}{\frac{1}{m} + \mathbf{t}\cdot\left(I^{-1}(\mathbf{r}\times\mathbf{t})\times\mathbf{r}\right)}
+\]
+\[
+J_t = \mathrm{clamp}\left(J_t^\*, -\mu |J_n|, +\mu |J_n|\right)
+\]
+Update:
+\[
+\mathbf{v}^+ = \mathbf{v}^- + \frac{J_n\mathbf{n}+J_t\mathbf{t}}{m},\qquad
+\boldsymbol{\omega}^+ = \boldsymbol{\omega}^- + I^{-1}\left(\mathbf{r}\times(J_n\mathbf{n}+J_t\mathbf{t})\right)
+\]
+
+These are standard impulse-based rigid-body collision formulas; using a robust contact solver (or iterating impulses across all active contacts) helps with the rapid jaw alternations of rattles and the simultaneous contacts of jams. citeturn10search0turn10search1turn1search22
+
+### Compliant/Hertz option (better peak forces and “squish”)
+
+If you want contact duration, peak force, and speed-dependent restitution, replace instantaneous impulses with a force law, commonly with Hertz-type normal stiffness:
+
+\[
+F_n = k_n \delta^{3/2} + c_n \delta^{1/2}\dot{\delta}
+\]
+where \(\delta\) is penetration depth. Hertzian scaling and effective modulus concepts are described in contact mechanics references. citeturn10search2turn10search6
+
+Tangential force can be modeled by a tangential spring-dashpot capped by Coulomb friction:
+\[
+\mathbf{F}_t = -k_t \boldsymbol{\xi}_t - c_t \mathbf{v}_t,\qquad \|\mathbf{F}_t\|\le \mu F_n
+\]
+Compliant methods can better reproduce the “softening” effect of facings/liners (reduced spit-backs), but require smaller timesteps for stability, especially in stiff contacts. citeturn10search2turn3search23
+
+### Capture volumes and escape conditions after partial entry
+
+A robust pocketing model avoids “binary” capture at the mouth. Use a **capture volume** \(V_{\text{cap}}\) that sits inside the pocket and has hysteresis:
+
+- **Enter pocket-cavity simulation** when \(\mathbf{x}\) crosses into \(A_{\text{shelf}}\) (gate 2) and the ball’s lowest point \(z-R\) becomes negative beyond a small threshold (e.g., \(z-R < -\varepsilon_z\)). Shelf definitions and ranges are specified by WPA/BCA. citeturn2search0turn2search1  
+- **Declare “captured”** only when \(\mathbf{x}\) crosses a deeper boundary such as \(z < z_{\text{lock}}\) (e.g., center is at least one radius below the bed plane) *and* outward escape would require interpenetrating the offset pocket geometry (approximate by checking that the center is outside the offset of \(A_{\text{mouth}}\)). This prevents false captures from brief mouth crossings during rattles.
+
+**Escape after partial entry** (classification; not necessarily a hard rule):  
+If \(\mathbf{x}\in A_{\text{mouth}}\) but \(\mathbf{x}\notin A_{\text{shelf}}\), and after the most recent pocket-surface impulse the outward component of velocity satisfies \((\mathbf{v}\cdot \hat{o})>0\) and the next TOI with pocket surfaces exceeds a clearance distance, treat as “escaped” and return to cloth dynamics. This aligns with the shelf’s role as the key geometric difficulty factor. citeturn2search0turn9view2
+
+## Spin and precession effects on pocketing probability
+
+Spin matters in pockets for the same reason it matters in cushions: it changes the **contact-point relative velocity**, altering friction force/impulse direction and magnitude, and therefore changes whether the ball “sticks, slides, climbs, or steers” along a jaw or liner.
+
+### Spin-induced forces and torques at a jaw/liner contact
+
+At a pocket contact point \(\mathbf{p}\) with normal \(\mathbf{n}\):
+
+\[
+\mathbf{v}_c = \mathbf{v} + \boldsymbol{\omega}\times(\mathbf{p}-\mathbf{x}),\qquad
+\mathbf{v}_t = \mathbf{v}_c - (\mathbf{v}_c\cdot \mathbf{n})\mathbf{n}
+\]
+
+A Coulomb friction force \(\mathbf{F}_t = -\mu F_n \frac{\mathbf{v}_t}{\|\mathbf{v}_t\|}\) produces a torque:
+\[
+\boldsymbol{\tau} = (\mathbf{p}-\mathbf{x})\times \mathbf{F}_t
+\]
+which changes \(\boldsymbol{\omega}\) and can rotate the spin axis (precession-like behavior due to torque perpendicular to \(\boldsymbol{\omega}\)). Impulse-based equivalents use \(\Delta\boldsymbol{\omega}=I^{-1}(\mathbf{r}\times \mathbf{J})\). citeturn10search0turn10search1
+
+**Interpretation for pocket modes (mechanistic):**
+
+- **Topspin (“follow”) aiding pocketing:** on a jaw impact, if the contact point slip points such that friction produces an inward lateral component, the ball can redirect into the throat and lose enough translational energy to drop rather than rebound. In measured pocket-size experiments, softer shots tended to fall more often partly because follow carries the ball to a better second-jaw contact and helps it “over the brink,” while faster shots have less time for that rotational coupling to develop. citeturn9view0  
+- **Backspin increasing rattle-out risk:** if backspin increases tangential slip opposite the motion, it can increase the magnitude of friction impulses that redirect outward after a jaw graze (depending on normal direction), promoting escape in marginal cases (this is a model-based inference from the contact kinematics and Coulomb friction; validate with experiments). citeturn10search0turn10search1  
+- **Sidespin steering on liners:** when contacting a near-vertical liner wall, \(\omega_z\) produces tangential surface velocity \(R\omega_z\) at the side, which can create a lateral friction force that pulls the ball along the wall deeper into the pocket or, if geometry is unfavorable, pushes it back toward the mouth. This is directly captured by the \(\boldsymbol{\omega}\times\mathbf{r}\) term. citeturn10search0turn2search0  
+
+### Pocket acceptance vs speed/angle and the role of spin
+
+Two experimentally supported qualitative facts are especially important for simulation tuning:
+
+- **Effective pocket size decreases at higher speed**, and high-speed shots are more prone to “rattle out,” especially when the near jaw/rail is grazed first. citeturn9view1turn9view0  
+- **Corner and side pockets behave differently with angle**, with side pocket acceptance degrading sharply at large angles. citeturn9view1  
+
+Therefore, if you are building an “acceptance chart” (angle vs speed vs spin), expect a surface where acceptance probability falls with speed and with unfavorable angles, and is modulated by spin through the tangential impulse mechanism above. Jewett’s measurements provide a starting qualitative calibration that acceptance for “soft” shots can exceed “hard” shots substantially at certain angles (e.g., around a few degrees off the rail). citeturn9view0turn9view1
+
+## Numerical guidance and avoiding tunneling or false captures
+
+Pocket regions are the most numerically fragile part of billiards simulation: tight clearances, high curvature, and fast event sequences. Techniques from rigid-body simulation practice are therefore essential. citeturn10search0turn10search1turn1search22
+
+### CCD vs event-driven TOI
+
+**Strong recommendation:** use **continuous collision detection (CCD)** or an **event-driven time-of-impact (TOI)** loop for pocket boundaries and jaws.
+
+- At high speeds, discrete stepping can skip over a jaw contact, producing nonphysical “ghost pocketing” or missing a rattle that should reject. CCD is standard advice in impulse-based rigid body simulation and is also emphasized in iterative contact approaches for stable time stepping. citeturn10search0turn10search1  
+- If you use event-driven TOI: after each event, recompute TOIs because the velocity direction changes; this is critical for double-hits near pockets and multi-jaw rattles. Event-list approaches are used in billiards simulation frameworks that predict collision times analytically between events. citeturn4view0
+
+### Contact tolerances and “capture hysteresis”
+
+Suggested engineering tolerances (in meters, assuming meter units):
+
+- Contact distance slop: \(\varepsilon_p \sim 10^{-5}\) to \(10^{-4}\) m (10–100 µm) for pocket surfaces; larger values can create false jams/hangs; smaller values can cause jitter if normals are noisy (mesh). (This is an engineering recommendation; validate against your scale and floating-point precision.) citeturn10search1turn10search0  
+- Velocity thresholds: \(v_{\text{sleep}} \sim 10^{-3}\) to \(10^{-2}\) m/s for “resting in pocket,” but only after ensuring the ball is in a stable contact configuration; otherwise you can incorrectly freeze a ball mid-rattle. citeturn10search1turn1search22  
+- Capture hysteresis: use two boundaries, \(A_{\text{shelf}}\) to enter pocket-cavity simulation and a deeper \(V_{\text{cap}}\) (or \(z_{\text{lock}}\)) to declare irreversible capture; this directly addresses false captures from brief mouth crossings. Shelf definitions and ranges are codified in WPA/BCA specs. citeturn2search0turn2search1  
+
+### Multi-contact stability strategies (rattle and jam)
+
+- If using impulse sequences, iterate over all active contacts at a given time and apply impulses repeatedly (or use a PGS solver) until constraint violations are small; this is aligned with iterative dynamics formulations in real-time engines. citeturn10search1  
+- For near-simultaneous dual-jaw impacts (jam), consider treating the set of contacts as one multi-impact “phase.” State-transition models of simultaneous impacts formalize this idea: impacts may become active/inactive as restitution finishes or new penetrations occur. citeturn1search22  
+- Smooth multi-impact models have been proposed specifically in a pool/billiards context to represent multiple impacts without the discontinuities of event-driven impulses; these are viable if you can afford smaller timesteps and want smoother trajectories in pocket rattles. citeturn3search23  
+
+## Default pocket parameters, comparison tables, and validation protocols
+
+### Pocket geometry comparison table (official sources)
+
+**Table: pocket geometry for common cue-sport standards**
+
+| Standard / pocket type | Corner mouth | Side mouth | Vertical pocket angle | Cut/entrance angles | Shelf depth |
+|---|---:|---:|---:|---:|---:|
+| entity["organization","World Pool-Billiard Association","pool governing body"] (recommended equipment specs) | 4.5″–4.625″ | 5.0″–5.125″ | 12°–15° | Corner 142° (+1); Side 104° (+1) | Corner 1″–2¼″; Side 0–0.375″ |
+| entity["organization","Billiard Congress of America","billiards trade org us"] (equipment specs) | 4⅞″–5⅛″ | 5⅜″–5⅝″ | 12°–15° | Corner 142° (±1); Side 103° (±2) | Corner 1⅝″–1⅞″; Side 0–⅜″ |
+| entity["organization","World Professional Billiards and Snooker Association","snooker governing body"] (snooker rules) | Template-based | Template-based | (template-defined) | (template-defined) | (template-defined) |
+| entity["organization","Union Mondiale de Billard","carom governing body"] (carom billiards) | No pockets | No pockets | N/A | N/A | N/A |
+
+Sources: WPA and BCA pocket dimensions and measurement definitions; WPBSA’s requirement that pocket openings conform to authorized templates; UMB carom tables have no pockets. citeturn2search0turn2search1turn2search2turn2search6turn2search3
+
+### Default material/contact parameters for pocket modeling (with sensitivity guidance)
+
+Official specs constrain *what materials are used* (facings reinforced rubber; liners plastic/rubber/leather; liner shaping to direct down and not bounce balls back). They do not directly provide friction/restitution coefficients, so these must be **fitted**. The ranges below are “simulation defaults” anchored in: (i) published billiards friction/rest ranges used in physics modeling, (ii) experimentally fitted ball–cushion parameters for billiards impacts, and (iii) WPA liner behavior requirements. citeturn3search0turn3search3turn2search0turn10search0
+
+**Table: recommended default pocket-contact parameters (starting points to fit)**
+
+| Contact pair | Suggested coefficient of restitution \(e\) | Suggested friction \(\mu\) | Rationale |
+|---|---:|---:|---|
+| Ball–jaw facing (rubber facing at pocket point) | 0.6–0.9 (start 0.8) | 0.10–0.20 (start 0.14) | Ball–cushion modeling has used \(e\approx 0.98,\mu\approx 0.14\) under certain assumptions; general billiards “rail e” ranges are often reported lower; start in mid range and fit to rattle-out stats. citeturn3search3turn3search0 |
+| Ball–slate bevel / rim | 0.2–0.6 (start 0.4) | 0.15–0.40 (start 0.25) | Slate is hard, but cloth/liner interfaces and micro-impacts dissipate; bevel contacts should not be “bouncy.” (Assumption guided by WPA downward-directing intent and general contact mechanics practice.) citeturn2search0turn10search2 |
+| Ball–liner/boot (inside pocket) | 0.1–0.4 (start 0.2) | 0.3–0.8 (start 0.5) | WPA requires inner wall fashioned to direct downward and prevent return bounce-out; thus low \(e\), higher dissipation/friction is appropriate. citeturn2search0 |
+
+**Sensitivity guidance (what changes outcomes the most):**
+
+- **Shelf depth and facing geometry** dominate “hang vs drop” and “rattle vs fall” in marginal cases; both WPA/BCA treat shelf as a core dimension. citeturn2search0turn2search1turn9view2  
+- **Shot speed** strongly changes effective target size; hard shots can effectively reduce pocket acceptance and increase rattle-outs. citeturn9view1turn9view0  
+- **Friction at jaw contacts** controls how much spin influences steering in or out; even modest \(\mu\) changes can flip outcomes for near-point grazes because tangential impulses determine whether the second jaw contact is “friendly.” citeturn10search0turn9view0  
+
+### Validation experiments and data-collection protocols
+
+To fit pocket-specific parameters, focus on experiments that isolate pocket behavior from general cloth dynamics.
+
+**Recommended measurement setup (practical):**
+
+- **Overhead high-speed video** at 240–1000 fps if possible; one study in pool motor learning used high-speed camera tracking for ball trajectories (demonstrating feasibility of kinematic tracking). citeturn3search6  
+- Add a **side camera** aimed at the pocket to capture vertical motion, rim contacts, and liner rebounds.  
+- Use **fiducial calibration** (table markers) to reconstruct \((x,y)\) accurately and estimate \(\boldsymbol{\omega}\) via marked balls or optical flow (if you can). (Spin estimation is harder; treat as an advanced protocol.)
+
+**Pocket-focused experiments (each yields fit targets):**
+
+1. **Acceptance map (angle–speed grid) per pocket type**  
+   For each pocket: sweep approach angle and speed; record pocketed vs rejected. Compare to known behavior that effective target size shrinks with speed and with large angles, especially for side pockets. citeturn9view1turn9view0  
+
+2. **Rattle statistics**  
+   Deliberately aim near points at different speeds; record number of jaw contacts before outcome and post-rattle exit speed/direction. Fit jaw \(e,\mu\) and facing compliance/damping using observed decay across impacts. citeturn9view1turn1search22  
+
+3. **Hanger stability test**  
+   Place balls in marginal resting configurations (by hand or gentle nudges) to determine when they hang vs drop; fit static friction and bevel geometry; validate that your solver can represent stable equilibrium without jitter. (Use constraint solver techniques for resting contact.) citeturn10search1turn2search0  
+
+4. **Liner rebound suppression**  
+   Drop/roll balls into the pocket and measure whether any rebound onto the bed occurs; tune liner restitution and damping to align with WPA intent that inner walls direct downward and returns do not bounce balls back onto the table. citeturn2search0  
+
+### Pocket state-transition diagram (for implementation)
+
+```mermaid
+stateDiagram-v2
+  [*] --> FreeOnCloth
+
+  FreeOnCloth --> MouthProximity: center enters A_mouth (offset)
+  MouthProximity --> JawContact: contact with facing/jaw surfaces
+  MouthProximity --> FreeOnCloth: leaves A_mouth without contact
+
+  JawContact --> Rattle: alternating jaw hits (N>=2 within Tr)
+  Rattle --> PartialEntry: center inside A_mouth, not inside A_shelf
+  Rattle --> FreeOnCloth: exits A_mouth outward
+
+  PartialEntry --> ShelfCrossed: center enters A_shelf (offset)
+  PartialEntry --> FreeOnCloth: outward crossing + clearance (escape)
+
+  ShelfCrossed --> InCavity: z drops below bed, liner/bevel contact
+  InCavity --> Captured: center below z_lock and no geometric escape
+  InCavity --> SpitBack: rebound upward/outward to A_mouth
+  SpitBack --> FreeOnCloth: exits A_mouth outward
+
+  Captured --> SettledInPocket: v and omega below sleep thresholds
+  SettledInPocket --> [*]
+```
+
+This state machine matches the specification-driven gates (mouth, shelf) and supports rattle, spit-back, and hanger/jam as emergent subcases (resting contact in JawContact/PartialEntry/InCavity). Shelf definitions and their role in difficulty are emphasized in WPA/BCA and technical discussion of pocket geometry’s impact. citeturn2search0turn2search1turn9view2
+
+### Pseudocode: pocket decision logic with multi-contact pocket dynamics
+
+```pseudo
+function step_sim(dt):
+  # 1) Predict next event time using CCD / TOI for:
+  #    - ball-ball, ball-rail
+  #    - ball-pocket surfaces (jaw, bevel, liner)
+  t_event, contact_set = compute_next_TOI(dt)
+
+  # 2) Integrate continuous motion to t_event
+  integrate_free_motion(t_event)
+
+  # 3) Resolve contacts at event time
+  if contact_set not empty:
+     if use_impulses:
+        # iterate to handle simultaneous/multi-contact (rattle/jam)
+        for iter in 1..N_iter:
+           for c in contact_set:
+              apply_normal_and_friction_impulses(c)
+           contact_set = rebuild_active_contacts(eps_p)
+           if contacts_converged(contact_set): break
+     else:
+        # compliant/contact-force mode
+        for substep in 1..N_sub:
+           compute_contact_forces(contact_set)
+           integrate_forces(dt_sub)
+
+  # 4) Update pocket state machine
+  for ball in balls:
+     update_gate_membership(ball, A_mouth, A_shelf)
+     if ball.state == FreeOnCloth and ball.in_mouth: ball.state = MouthProximity
+     if ball.state in {MouthProximity, JawContact, Rattle, PartialEntry}:
+         if ball.in_shelf: ball.state = ShelfCrossed
+         else if escaped_outward(ball): ball.state = FreeOnCloth
+
+     if ball.state == ShelfCrossed:
+         ball.state = InCavity  # switch to cavity surfaces + gravity
+
+     if ball.state == InCavity:
+         if captured(ball): ball.state = Captured
+         else if spit_back(ball): ball.state = SpitBack
+
+     if ball.state == Captured and near_rest(ball):
+         ball.state = SettledInPocket
+```
+
+The convergence loop for impulses mirrors widely used iterative dynamics approaches for contacts, which are especially important for multi-contact rattles and wedges. citeturn10search1turn1search22turn10search0

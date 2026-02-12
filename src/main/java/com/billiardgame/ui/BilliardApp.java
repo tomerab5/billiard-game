@@ -345,6 +345,16 @@ public final class BilliardApp extends Application {
         for (PhysicsWorld.DebugSegment s : world.pocketMouthSegmentsPx()) {
             gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
         }
+        gc.setStroke(Color.color(1.0, 0.92, 0.36, 0.78));
+        gc.setLineWidth(1.5);
+        for (PhysicsWorld.DebugSegment s : world.pocketFacingSegmentsPx()) {
+            gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+        }
+        gc.setStroke(Color.color(0.95, 0.45, 0.80, 0.78));
+        gc.setLineWidth(1.6);
+        for (PhysicsWorld.DebugSegment s : world.pocketShelfSegmentsPx()) {
+            gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+        }
         gc.setStroke(Color.color(1.0, 0.65, 0.35, 0.70));
         gc.setLineWidth(1.4);
         for (PhysicsWorld.DebugArc a : world.pocketJawArcsPx()) {
@@ -1040,7 +1050,14 @@ public final class BilliardApp extends Application {
     private void drawBall(GraphicsContext gc, Ball ball, int index) {
         double x = ball.position().x();
         double y = ball.position().y();
-        double r = ball.radius();
+        double alphaMul = world.ballRenderAlpha(index);
+        double scaleMul = world.ballRenderScale(index);
+        double r = ball.radius() * scaleMul;
+        if (alphaMul <= 0.01 || r <= 0.05) {
+            return;
+        }
+        gc.save();
+        gc.setGlobalAlpha(alphaMul);
         Color midColor = index == 0 ? Color.web("#f4f4f4") : Color.web("#d84d4d");
         Color edgeColor = index == 0 ? Color.web("#cfcfcf") : Color.web("#8b2323");
         double lightX = LIGHT_DIR_SCREEN.x();
@@ -1053,13 +1070,14 @@ public final class BilliardApp extends Application {
         double bottomGap = (state.tableY() + state.tableHeight() - r) - ball.position().y();
         double minRailGap = Math.min(Math.min(leftGap, rightGap), Math.min(topGap, bottomGap));
         double railOcclusion = clamp01(minRailGap / (r * 1.8));
+        double shadowMul = alphaMul * (0.45 + 0.55 * scaleMul);
 
         if (showBallShading) {
             double shadowOffsetX = -lightX * r * 0.30;
             double shadowOffsetY = -lightY * r * 0.30;
             double shadowScale = 1.0 + (speedScale * 0.12);
             double occlusionBoost = 1.0 + ((1.0 - railOcclusion) * 0.30);
-            double shadowAlpha = (0.24 + (speedScale * 0.08)) * occlusionBoost;
+            double shadowAlpha = (0.24 + (speedScale * 0.08)) * occlusionBoost * shadowMul;
             gc.setFill(new RadialGradient(
                 0, 0,
                 x + shadowOffsetX, y + shadowOffsetY + r * 0.74,
@@ -1089,7 +1107,7 @@ public final class BilliardApp extends Application {
 
             if (showAdvancedLighting && ballSpeckleTexture != null) {
                 gc.save();
-                gc.setGlobalAlpha(index == 0 ? 0.05 : 0.04);
+                gc.setGlobalAlpha((index == 0 ? 0.05 : 0.04) * alphaMul);
                 gc.setFill(new ImagePattern(ballSpeckleTexture, x - r, y - r, r * 1.35, r * 1.35, false));
                 gc.fillOval(x - r, y - r, r * 2, r * 2);
                 gc.restore();
@@ -1155,6 +1173,7 @@ public final class BilliardApp extends Application {
             ));
             gc.fillOval(specX - specR, specY - specR, specR * 2, specR * 2);
         }
+        gc.restore();
     }
 
     private void drawBloomPass(GraphicsContext gc, double t) {
