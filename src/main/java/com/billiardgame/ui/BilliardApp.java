@@ -955,10 +955,17 @@ public final class BilliardApp extends Application {
                 gc.fillText(String.format("wz %.2f", wz), ball.position().x() + ball.radius() + 5, ball.position().y() - ball.radius() - 3);
             }
             if (showOmegaOverlay) {
+                double speed = world.ballVelocity(i).length();
+                double slip = world.ballSlipSpeed(i);
                 double omega = world.ballAngularVelocity(i).length();
+                double omegaZ = world.ballAngularVelocity(i).z();
                 gc.setFill(Color.color(1.0, 0.96, 0.72, 0.95));
                 gc.setFont(Font.font("Consolas", FontWeight.BOLD, 11));
-                gc.fillText(String.format("|w| %.2f", omega), ball.position().x() + ball.radius() + 5, ball.position().y() + ball.radius() + 14);
+                gc.fillText(
+                        String.format("|v| %.1f  |u| %.2f  |w| %.2f  wz %.2f", speed, slip, omega, omegaZ),
+                        ball.position().x() + ball.radius() + 5,
+                        ball.position().y() + ball.radius() + 14
+                );
             }
         }
 

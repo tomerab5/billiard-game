@@ -25,11 +25,11 @@ public final class PhysicsConfig {
     public static final double STOP_EPS_M_PER_S = 0.030;
     public static final double SLIP_EPS_M_PER_S = 0.030;
     public static final double STOP_SPIN_EPS_RAD_PER_S = 0.25;
+    public static final double SPIN_DECAY_SMOOTH_EPS_RAD_PER_S = 1.0;
     public static final double COLLISION_EPS = 1e-9;
     public static final double ORIENTATION_INTEGRATION_EPS_RAD = 1e-8;
     public static final double BALL_COLLISION_TANGENTIAL_EPS_M_PER_S = 1e-4;
-    public static final double SLIP_TO_ROLLING_EPS_SCALE = 1.5;
-    public static final double SLIP_TO_ROLLING_SPEED_M_PER_S = 0.35;
+    public static final double SLIP_TO_ROLLING_EPS_SCALE = 1.0;
     public static final double FIXED_TIME_STEP_SECONDS = 1.0 / 120.0;
 
     // [Ball-ball collision physics] Impulse coefficients.

@@ -128,6 +128,10 @@ public final class PhysicsWorld {
         return toPixels(balls.get(index).velocity);
     }
 
+    public double ballSlipSpeed(int index) {
+        return toPixels(slipVelocityAtContact(balls.get(index)).length());
+    }
+
     public void setBallAngularVelocity(int index, Vector3 angularVelocity) {
         balls.get(index).angularVelocity = angularVelocity;
     }
@@ -446,7 +450,7 @@ public final class PhysicsWorld {
         Vector2 v = ballBody.velocity;
         Vector3 w = ballBody.angularVelocity;
 
-        Vector2 slipVelocity = v.add(new Vector2(-ballBody.radius * w.y(), ballBody.radius * w.x()));
+        Vector2 slipVelocity = slipVelocityAtContact(ballBody);
         double slipSpeed = slipVelocity.length();
         double speed = v.length();
 
@@ -473,8 +477,7 @@ public final class PhysicsWorld {
             Vector3 nextAngularVelocity = new Vector3(wx, wy, wz);
 
             Vector2 nextSlip = nextVelocity.add(new Vector2(-ballBody.radius * nextAngularVelocity.y(), ballBody.radius * nextAngularVelocity.x()));
-            if (nextSlip.length() <= (PhysicsConfig.SLIP_EPS_M_PER_S * PhysicsConfig.SLIP_TO_ROLLING_EPS_SCALE)
-                    || nextVelocity.length() <= PhysicsConfig.SLIP_TO_ROLLING_SPEED_M_PER_S) {
+            if (nextSlip.length() <= (PhysicsConfig.SLIP_EPS_M_PER_S * PhysicsConfig.SLIP_TO_ROLLING_EPS_SCALE)) {
                 double rollingSpeed = nextVelocity.length();
                 Vector2 rollingVelocity = rollingSpeed > 0.0 ? nextVelocity.normalized().mul(rollingSpeed) : Vector2.ZERO;
                 ballBody.velocity = rollingVelocity;
@@ -520,7 +523,16 @@ public final class PhysicsWorld {
         if (decayed <= 0.0) {
             return 0.0;
         }
+        if (decayed < PhysicsConfig.SPIN_DECAY_SMOOTH_EPS_RAD_PER_S) {
+            decayed = (decayed * decayed) / PhysicsConfig.SPIN_DECAY_SMOOTH_EPS_RAD_PER_S;
+        }
         return Math.copySign(decayed, wz);
+    }
+
+    private static Vector2 slipVelocityAtContact(BallBody ballBody) {
+        Vector2 v = ballBody.velocity;
+        Vector3 w = ballBody.angularVelocity;
+        return v.add(new Vector2(-ballBody.radius * w.y(), ballBody.radius * w.x()));
     }
 
     private void integrateOrientation(BallBody body, double dtSeconds) {
