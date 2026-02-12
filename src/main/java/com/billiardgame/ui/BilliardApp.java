@@ -5,6 +5,7 @@ import com.billiardgame.game.TableState;
 import com.billiardgame.physics.PhysicsConfig;
 import com.billiardgame.physics.PhysicsConstants;
 import com.billiardgame.physics.PhysicsWorld;
+import com.billiardgame.physics.Quaternion;
 import com.billiardgame.physics.TableBounds;
 import com.billiardgame.physics.Vector2;
 import com.billiardgame.physics.Vector3;
@@ -46,6 +47,7 @@ public final class BilliardApp extends Application {
     private static final double FIXED_DT_SECONDS = 1.0 / 120.0;
     private static final double PREDICTION_MAX_DISTANCE = 1400.0;
     private static final double POST_COLLISION_PREVIEW_DISTANCE = 260.0;
+    private static final double RAYCAST_EPSILON_PX = 0.5;
     private static final double TIP_OFFSET_MAX = 0.60;
     private static final double CUE_IDLE_GAP = 6.0;
     private static final double CUE_MAX_PULLBACK = 84.0;
@@ -58,8 +60,6 @@ public final class BilliardApp extends Application {
     private static final double SPECULAR_SIZE_RATIO = 0.35;
     private static final Vector2 LIGHT_DIR_SCREEN = new Vector2(-0.76, -0.65).normalized();
     private static final Vector2 CLOTH_NAP_DIR = new Vector2(-0.62, -0.45).normalized();
-    private static final Vector3 MARKER_LOCAL_1 = unit(0.6, 0.2, 0.77).mul(PhysicsConfig.BALL_RADIUS_M);
-    private static final Vector3 MARKER_LOCAL_2 = unit(-0.3, 0.7, 0.64).mul(PhysicsConfig.BALL_RADIUS_M);
     private static final int CLOTH_NOISE_SIZE = 256;
 
     private enum SimulatorState {
@@ -109,6 +109,7 @@ public final class BilliardApp extends Application {
     private double pendingShotSpeedPxPerSec = 0.0;
     private Vector2 pendingShotTipOffset = Vector2.ZERO;
     private boolean showSpinDebug = false;
+    private boolean showOmegaOverlay = false;
     private boolean showSpinMarkers = true;
     private boolean showBallShading = true;
     private boolean showTableLighting = true;
@@ -171,6 +172,8 @@ public final class BilliardApp extends Application {
                 world.increaseRollingFriction(0.001);
             } else if (event.getCode() == KeyCode.T) {
                 showSpinDebug = !showSpinDebug;
+            } else if (event.getCode() == KeyCode.O) {
+                showOmegaOverlay = !showOmegaOverlay;
             } else if (event.getCode() == KeyCode.V) {
                 showSpinMarkers = !showSpinMarkers;
             } else if (event.getCode() == KeyCode.H) {
@@ -272,7 +275,7 @@ public final class BilliardApp extends Application {
                         cueBall.position().x() + (cueBall.radius() * 3.2),
                         cueBall.position().y()
                 ),
-                cueBall.radius()
+                BALL_RADIUS_PX
         );
         TableBounds tableBounds = new TableBounds(
                 state.tableX(),
@@ -607,7 +610,11 @@ public final class BilliardApp extends Application {
             return;
         }
 
-        Ball cueBall = world.cueBall();
+        List<Ball> balls = world.balls();
+        if (balls.isEmpty()) {
+            return;
+        }
+        Ball cueBall = balls.get(0);
         double chargeRatio = Math.min(1.0, lastChargeSeconds / PhysicsConstants.CHARGE_TIME_TO_MAX);
         Vector2 origin = cueBall.position();
         Vector2 toMouse = mousePosition.sub(origin);
@@ -615,9 +622,9 @@ public final class BilliardApp extends Application {
             return;
         }
         Vector2 direction = toMouse.normalized();
-        Prediction prediction = predictFirstCollision(cueBall, direction, world.balls());
-        Vector2 endPoint = prediction.hitPoint != null
-                ? prediction.hitPoint
+        SceneHit firstHit = raycastScene(origin, direction, cueBall.radius(), balls, 0, PREDICTION_MAX_DISTANCE);
+        Vector2 endPoint = firstHit.hitPoint != null
+                ? firstHit.hitPoint
                 : origin.add(direction.mul(PREDICTION_MAX_DISTANCE));
 
         gc.setLineDashes(8, 8);
@@ -626,29 +633,33 @@ public final class BilliardApp extends Application {
         gc.strokeLine(origin.x(), origin.y(), endPoint.x(), endPoint.y());
         gc.setLineDashes(null);
 
-        if (prediction.type == HitType.RAIL && prediction.reflectionDirection != null) {
-            Vector2 start = prediction.hitPoint.add(prediction.reflectionDirection.mul(0.5));
-            double maxT = distanceToRail(start, prediction.reflectionDirection, cueBall.radius());
-            double segment = Math.min(POST_COLLISION_PREVIEW_DISTANCE, maxT);
-            Vector2 after = start.add(prediction.reflectionDirection.mul(segment));
+        if (firstHit.type == HitType.RAIL && firstHit.hitPoint != null && firstHit.normal != null) {
+            double dn = (direction.x() * firstHit.normal.x()) + (direction.y() * firstHit.normal.y());
+            Vector2 reflectionDirection = direction.sub(firstHit.normal.mul(2.0 * dn)).normalized();
+            Vector2 start = firstHit.hitPoint.add(reflectionDirection.mul(RAYCAST_EPSILON_PX));
+            SceneHit secondHit = raycastScene(start, reflectionDirection, cueBall.radius(), balls, 0, POST_COLLISION_PREVIEW_DISTANCE);
+            Vector2 after = secondHit.hitPoint != null
+                    ? secondHit.hitPoint
+                    : start.add(reflectionDirection.mul(POST_COLLISION_PREVIEW_DISTANCE));
             drawPostCollisionSegment(gc, start, after, Color.color(0.98, 0.93, 0.65, 0.60), Color.color(1.0, 0.97, 0.78, 0.22));
-        } else if (prediction.type == HitType.BALL && prediction.objectBallDirection != null) {
-            Vector2 objectStart = prediction.hitPoint.add(prediction.objectBallDirection.mul(0.5));
-            double objectMaxT = distanceToRail(objectStart, prediction.objectBallDirection, cueBall.radius());
-            Vector2 objectAfter = objectStart.add(prediction.objectBallDirection.mul(Math.min(POST_COLLISION_PREVIEW_DISTANCE * 0.22, objectMaxT)));
-            drawPostCollisionSegment(gc, objectStart, objectAfter, Color.color(0.73, 0.90, 1.0, 0.78), Color.color(0.86, 0.96, 1.0, 0.24));
+            drawObjectBallPrediction(gc, balls, secondHit, start, reflectionDirection, cueBall.radius());
+        } else if (firstHit.type == HitType.BALL && firstHit.hitPoint != null && firstHit.normal != null) {
+            drawObjectBallPrediction(gc, balls, firstHit, origin, direction, cueBall.radius());
 
-            if (prediction.cueDeflectDirection != null && prediction.cueDeflectDirection.length() > 1e-6) {
-                Vector2 cueStart = prediction.hitPoint.add(prediction.cueDeflectDirection.mul(0.5));
-                PreviewHit secondHit = predictSegmentHit(cueStart, prediction.cueDeflectDirection, cueBall.radius(), cueBall, world.balls());
+            Vector2 objectDirection = firstHit.normal.normalized();
+            double dn = (direction.x() * objectDirection.x()) + (direction.y() * objectDirection.y());
+            Vector2 cueDeflectDirection = direction.sub(objectDirection.mul(dn)).normalized();
+            if (cueDeflectDirection.length() < 1e-6) {
+                cueDeflectDirection = new Vector2(-objectDirection.y(), objectDirection.x()).normalized();
+            }
+
+            if (cueDeflectDirection.length() > 1e-6) {
+                Vector2 cueStart = firstHit.hitPoint.add(cueDeflectDirection.mul(0.5));
                 double cueSegLen = POST_COLLISION_PREVIEW_DISTANCE * 0.75;
-                Vector2 cueAfter = cueStart.add(prediction.cueDeflectDirection.normalized().mul(cueSegLen));
-                if (secondHit.type != HitType.NONE && secondHit.hitPoint != null) {
-                    double tHit = secondHit.hitPoint.sub(cueStart).length();
-                    if (tHit < cueSegLen) {
-                        cueAfter = secondHit.hitPoint;
-                    }
-                }
+                SceneHit secondHit = raycastScene(cueStart, cueDeflectDirection, cueBall.radius(), balls, 0, cueSegLen);
+                Vector2 cueAfter = secondHit.hitPoint != null
+                        ? secondHit.hitPoint
+                        : cueStart.add(cueDeflectDirection.mul(cueSegLen));
                 drawPostCollisionSegment(gc, cueStart, cueAfter, Color.color(1.0, 0.85, 0.58, 0.48), Color.color(1.0, 0.92, 0.72, 0.18));
 
                 if (secondHit.type == HitType.BALL && secondHit.normal != null && secondHit.hitPoint != null) {
@@ -824,10 +835,30 @@ public final class BilliardApp extends Application {
         return bestT;
     }
 
-    private PreviewHit predictSegmentHit(Vector2 origin, Vector2 direction, double movingRadius, Ball movingBall, List<Ball> allBalls) {
+    private void drawObjectBallPrediction(GraphicsContext gc, List<Ball> allBalls, SceneHit hit, Vector2 segOrigin, Vector2 segDir, double cueRadius) {
+        if (hit.type != HitType.BALL || hit.hitBallId < 0 || hit.hitBallId >= allBalls.size()) {
+            return;
+        }
+        Vector2 dir = segDir.normalized();
+        if (dir.length() < 1e-9 || !Double.isFinite(hit.hitT)) {
+            return;
+        }
+        Ball target = allBalls.get(hit.hitBallId);
+        Vector2 cueCenterAtImpact = segOrigin.add(dir.mul(hit.hitT));
+        Vector2 normal = target.position().sub(cueCenterAtImpact).normalized();
+        if (normal.length() < 1e-9) {
+            return;
+        }
+        Vector2 objectStart = target.position();
+        double objectMaxT = distanceToRail(objectStart, normal, cueRadius);
+        Vector2 objectAfter = objectStart.add(normal.mul(Math.min(POST_COLLISION_PREVIEW_DISTANCE * 0.22, objectMaxT)));
+        drawPostCollisionSegment(gc, objectStart, objectAfter, Color.color(0.73, 0.90, 1.0, 0.78), Color.color(0.86, 0.96, 1.0, 0.24));
+    }
+
+    private SceneHit raycastScene(Vector2 origin, Vector2 direction, double movingRadius, List<Ball> allBalls, int ignoreBallId, double maxDistance) {
         Vector2 dir = direction.normalized();
         if (dir.length() < 1e-9) {
-            return new PreviewHit(HitType.NONE, null, null, null);
+            return new SceneHit(HitType.NONE, null, null, -1, Double.POSITIVE_INFINITY);
         }
 
         double left = state.tableX() + movingRadius;
@@ -839,47 +870,52 @@ public final class BilliardApp extends Application {
         HitType hitType = HitType.NONE;
         Vector2 hitPoint = null;
         Vector2 normal = null;
-        Ball hitBall = null;
+        int hitBallId = -1;
 
         if (dir.x() > 1e-9) {
             double t = (right - origin.x()) / dir.x();
-            if (t > 1e-6 && t < bestT) {
+            if (t > 1e-6 && t <= maxDistance && t < bestT) {
                 bestT = t;
                 hitType = HitType.RAIL;
                 hitPoint = origin.add(dir.mul(t));
                 normal = new Vector2(-1, 0);
+                hitBallId = -1;
             }
         } else if (dir.x() < -1e-9) {
             double t = (left - origin.x()) / dir.x();
-            if (t > 1e-6 && t < bestT) {
+            if (t > 1e-6 && t <= maxDistance && t < bestT) {
                 bestT = t;
                 hitType = HitType.RAIL;
                 hitPoint = origin.add(dir.mul(t));
                 normal = new Vector2(1, 0);
+                hitBallId = -1;
             }
         }
         if (dir.y() > 1e-9) {
             double t = (bottom - origin.y()) / dir.y();
-            if (t > 1e-6 && t < bestT) {
+            if (t > 1e-6 && t <= maxDistance && t < bestT) {
                 bestT = t;
                 hitType = HitType.RAIL;
                 hitPoint = origin.add(dir.mul(t));
                 normal = new Vector2(0, -1);
+                hitBallId = -1;
             }
         } else if (dir.y() < -1e-9) {
             double t = (top - origin.y()) / dir.y();
-            if (t > 1e-6 && t < bestT) {
+            if (t > 1e-6 && t <= maxDistance && t < bestT) {
                 bestT = t;
                 hitType = HitType.RAIL;
                 hitPoint = origin.add(dir.mul(t));
                 normal = new Vector2(0, 1);
+                hitBallId = -1;
             }
         }
 
-        for (Ball ball : allBalls) {
-            if (ball == movingBall) {
+        for (int i = 0; i < allBalls.size(); i++) {
+            if (i == ignoreBallId) {
                 continue;
             }
+            Ball ball = allBalls.get(i);
             Vector2 oc = origin.sub(ball.position());
             double sumR = movingRadius + ball.radius();
             double b = 2.0 * ((dir.x() * oc.x()) + (dir.y() * oc.y()));
@@ -893,109 +929,17 @@ public final class BilliardApp extends Application {
             if (t <= 1e-6 || t >= bestT) {
                 continue;
             }
+            if (t > maxDistance) {
+                continue;
+            }
             bestT = t;
             hitType = HitType.BALL;
             hitPoint = origin.add(dir.mul(t));
             normal = ball.position().sub(hitPoint).normalized();
-            hitBall = ball;
+            hitBallId = i;
         }
 
-        return new PreviewHit(hitType, hitPoint, normal, hitBall);
-    }
-
-    private Prediction predictFirstCollision(Ball cueBall, Vector2 direction, List<Ball> allBalls) {
-        Vector2 origin = cueBall.position();
-        double cueRadius = cueBall.radius();
-
-        double left = state.tableX() + cueRadius;
-        double right = state.tableX() + state.tableWidth() - cueRadius;
-        double top = state.tableY() + cueRadius;
-        double bottom = state.tableY() + state.tableHeight() - cueRadius;
-
-        double bestT = Double.POSITIVE_INFINITY;
-        HitType type = HitType.NONE;
-        Vector2 hitPoint = null;
-        Vector2 normal = null;
-
-        if (direction.x() > 1e-9) {
-            double t = (right - origin.x()) / direction.x();
-            if (t > 1e-6 && t < bestT) {
-                bestT = t;
-                type = HitType.RAIL;
-                hitPoint = origin.add(direction.mul(t));
-                normal = new Vector2(-1, 0);
-            }
-        } else if (direction.x() < -1e-9) {
-            double t = (left - origin.x()) / direction.x();
-            if (t > 1e-6 && t < bestT) {
-                bestT = t;
-                type = HitType.RAIL;
-                hitPoint = origin.add(direction.mul(t));
-                normal = new Vector2(1, 0);
-            }
-        }
-
-        if (direction.y() > 1e-9) {
-            double t = (bottom - origin.y()) / direction.y();
-            if (t > 1e-6 && t < bestT) {
-                bestT = t;
-                type = HitType.RAIL;
-                hitPoint = origin.add(direction.mul(t));
-                normal = new Vector2(0, -1);
-            }
-        } else if (direction.y() < -1e-9) {
-            double t = (top - origin.y()) / direction.y();
-            if (t > 1e-6 && t < bestT) {
-                bestT = t;
-                type = HitType.RAIL;
-                hitPoint = origin.add(direction.mul(t));
-                normal = new Vector2(0, 1);
-            }
-        }
-
-        for (Ball ball : allBalls) {
-            if (ball == cueBall) {
-                continue;
-            }
-            Vector2 oc = origin.sub(ball.position());
-            double sumR = cueRadius + ball.radius();
-            double b = 2.0 * ((direction.x() * oc.x()) + (direction.y() * oc.y()));
-            double c = oc.lengthSq() - (sumR * sumR);
-            double disc = (b * b) - (4.0 * c);
-            if (disc < 0.0) {
-                continue;
-            }
-
-            double sqrtDisc = Math.sqrt(disc);
-            double t = (-b - sqrtDisc) * 0.5;
-            if (t <= 1e-6 || t >= bestT) {
-                continue;
-            }
-
-            bestT = t;
-            type = HitType.BALL;
-            hitPoint = origin.add(direction.mul(t));
-            normal = ball.position().sub(hitPoint).normalized();
-        }
-
-        if (type == HitType.NONE || hitPoint == null) {
-            return new Prediction(HitType.NONE, null, null, null, null);
-        }
-
-        if (type == HitType.RAIL) {
-            double dn = (direction.x() * normal.x()) + (direction.y() * normal.y());
-            Vector2 reflection = direction.sub(normal.mul(2.0 * dn)).normalized();
-            return new Prediction(type, hitPoint, reflection, null, null);
-        }
-
-        Vector2 n = normal != null ? normal : Vector2.ZERO;
-        double dn = (direction.x() * n.x()) + (direction.y() * n.y());
-        Vector2 objectDirection = n.normalized();
-        Vector2 cueDeflect = direction.sub(n.mul(dn)).normalized();
-        if (cueDeflect.length() < 1e-6) {
-            cueDeflect = new Vector2(-n.y(), n.x()).normalized();
-        }
-        return new Prediction(type, hitPoint, null, objectDirection, cueDeflect);
+        return new SceneHit(hitType, hitPoint, normal, hitBallId, bestT);
     }
 
     private void drawBalls(GraphicsContext gc) {
@@ -1009,6 +953,12 @@ public final class BilliardApp extends Application {
                 gc.setFill(Color.color(0.90, 0.95, 1.0, 0.92));
                 gc.setFont(Font.font("Consolas", FontWeight.BOLD, 11));
                 gc.fillText(String.format("wz %.2f", wz), ball.position().x() + ball.radius() + 5, ball.position().y() - ball.radius() - 3);
+            }
+            if (showOmegaOverlay) {
+                double omega = world.ballAngularVelocity(i).length();
+                gc.setFill(Color.color(1.0, 0.96, 0.72, 0.95));
+                gc.setFont(Font.font("Consolas", FontWeight.BOLD, 11));
+                gc.fillText(String.format("|w| %.2f", omega), ball.position().x() + ball.radius() + 5, ball.position().y() + ball.radius() + 14);
             }
         }
 
@@ -1038,30 +988,46 @@ public final class BilliardApp extends Application {
         if (!showSpinMarkers) {
             return;
         }
-
-        Vector3 p1 = world.ballOrientation(index).rotate(MARKER_LOCAL_1);
-        Vector3 p2 = world.ballOrientation(index).rotate(MARKER_LOCAL_2);
-        drawSpinMarker(gc, ball, p1, Color.color(0.18, 0.22, 0.25, 0.62), 0.090);
-        drawSpinMarker(gc, ball, p2, Color.color(0.95, 0.96, 0.98, 0.40), 0.060);
+        Quaternion orientation = world.ballOrientation(index);
+        double omega = world.ballAngularVelocity(index).length();
+        double omegaScale = clamp01(omega / 45.0);
+        double seamWidth = 1.8 + (omegaScale * 1.6);
+        double seamAlpha = 0.60 + (omegaScale * 0.28);
+        drawSpinSeam(gc, ball, orientation, new Vector3(0, 0, 1), Color.color(0.08, 0.10, 0.12, seamAlpha), seamWidth);
+        drawSpinSeam(gc, ball, orientation, unit(0.86, 0.0, 0.50), Color.color(0.96, 0.97, 0.99, 0.52 + 0.22 * omegaScale), seamWidth * 0.9);
+        drawSpinSeam(gc, ball, orientation, unit(0.0, 0.80, 0.60), Color.color(0.16, 0.18, 0.20, 0.46 + 0.22 * omegaScale), seamWidth * 0.8);
     }
 
-    private void drawSpinMarker(GraphicsContext gc, Ball ball, Vector3 p, Color color, double sizeMul) {
-        if (p.z() <= 0.0) {
-            return;
-        }
-        double screenX = ball.position().x() + (p.x() * PIXELS_PER_METER);
-        double screenY = ball.position().y() - (p.y() * PIXELS_PER_METER);
-        double zNorm = clamp01(p.z() / PhysicsConfig.BALL_RADIUS_M);
-        double zScale = 0.5 + 0.5 * zNorm;
-        double r = Math.max(1.1, ball.radius() * sizeMul * zScale);
-        double alpha = 0.18 + 0.62 * zNorm;
-        Color fill = Color.color(color.getRed(), color.getGreen(), color.getBlue(), color.getOpacity() * alpha);
+    private void drawSpinSeam(GraphicsContext gc, Ball ball, Quaternion orientation, Vector3 localNormal, Color color, double lineWidth) {
+        Vector3 n = localNormal.normalized();
+        Vector3 ref = Math.abs(n.z()) < 0.9 ? new Vector3(0, 0, 1) : new Vector3(1, 0, 0);
+        Vector3 u = cross3(n, ref).normalized();
+        Vector3 v = cross3(n, u).normalized();
+        double radiusM = ball.radius() / PIXELS_PER_METER;
 
-        gc.setFill(fill);
-        gc.fillOval(screenX - r, screenY - r, r * 2, r * 2);
-        gc.setStroke(Color.color(0, 0, 0, 0.22));
-        gc.setLineWidth(0.6);
-        gc.strokeOval(screenX - r, screenY - r, r * 2, r * 2);
+        gc.setStroke(color);
+        gc.setLineWidth(lineWidth);
+        gc.setLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+
+        boolean drawing = false;
+        double prevX = 0.0;
+        double prevY = 0.0;
+        for (int i = 0; i <= 96; i++) {
+            double t = (Math.PI * 2.0 * i) / 96.0;
+            Vector3 localPoint = u.mul(Math.cos(t) * radiusM).add(v.mul(Math.sin(t) * radiusM));
+            Vector3 p = orientation.rotate(localPoint);
+            boolean visible = p.z() >= 0.0;
+            double sx = ball.position().x() + (p.x() * PIXELS_PER_METER);
+            double sy = ball.position().y() - (p.y() * PIXELS_PER_METER);
+            if (visible) {
+                if (drawing) {
+                    gc.strokeLine(prevX, prevY, sx, sy);
+                }
+                prevX = sx;
+                prevY = sy;
+            }
+            drawing = visible;
+        }
     }
 
     private void drawBall(GraphicsContext gc, Ball ball, int index) {
@@ -1320,33 +1286,19 @@ public final class BilliardApp extends Application {
         return world.cueBall().position().y();
     }
 
-    private static final class Prediction {
-        private final HitType type;
-        private final Vector2 hitPoint;
-        private final Vector2 reflectionDirection;
-        private final Vector2 objectBallDirection;
-        private final Vector2 cueDeflectDirection;
-
-        private Prediction(HitType type, Vector2 hitPoint, Vector2 reflectionDirection, Vector2 objectBallDirection, Vector2 cueDeflectDirection) {
-            this.type = type;
-            this.hitPoint = hitPoint;
-            this.reflectionDirection = reflectionDirection;
-            this.objectBallDirection = objectBallDirection;
-            this.cueDeflectDirection = cueDeflectDirection;
-        }
-    }
-
-    private static final class PreviewHit {
+    private static final class SceneHit {
         private final HitType type;
         private final Vector2 hitPoint;
         private final Vector2 normal;
-        private final Ball hitBall;
+        private final int hitBallId;
+        private final double hitT;
 
-        private PreviewHit(HitType type, Vector2 hitPoint, Vector2 normal, Ball hitBall) {
+        private SceneHit(HitType type, Vector2 hitPoint, Vector2 normal, int hitBallId, double hitT) {
             this.type = type;
             this.hitPoint = hitPoint;
             this.normal = normal;
-            this.hitBall = hitBall;
+            this.hitBallId = hitBallId;
+            this.hitT = hitT;
         }
     }
 
@@ -1384,6 +1336,14 @@ public final class BilliardApp extends Application {
             return Vector3.ZERO;
         }
         return new Vector3(x / len, y / len, z / len);
+    }
+
+    private static Vector3 cross3(Vector3 a, Vector3 b) {
+        return new Vector3(
+                (a.y() * b.z()) - (a.z() * b.y()),
+                (a.z() * b.x()) - (a.x() * b.z()),
+                (a.x() * b.y()) - (a.y() * b.x())
+        );
     }
 
     private static double clamp01(double value) {

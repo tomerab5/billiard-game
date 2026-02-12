@@ -1,45 +1,22 @@
-Upgrade 2.5D rendering toward broadcast realism. No physics changes.
+AIM GUIDE FIX: The 2nd yellow segment now stops correctly, but when that 2nd segment hits a BALL (after a rail bounce), we must ALSO draw the WHITE line predicting the struck ball’s trajectory — same behavior as when the 1st segment hits a ball.
 
-A) Cloth nap direction
+Acceptance:
+- If segment1 hits ball -> draw white object-ball line (existing behavior).
+- If segment1 hits rail and segment2 hits ball -> draw white object-ball line at segment2 end (NEW requirement).
+- White line direction should be computed from the predicted collision geometry at that segment’s impact:
+  Use cueCenterAtImpact = segOrigin + dir * tHit (tHit returned by raycast vs expanded radius Rsum = cueR + targetR),
+  then normal = normalize(targetCenter - cueCenterAtImpact),
+  then draw the white line from targetCenter along 'normal'. No extra yellow segments.
 
-Add directional shading to cloth:
+Do:
+1) Locate aim guide code:
+   rg -n "drawAimGuide|trajectory|predict|raycast|HitType|white" src/main/java/com/billiardgame/ui/BilliardApp.java
+2) Ensure the segment2 hit branch (HitType.BALL) calls the SAME helper used for segment1 to draw the object-ball white line.
+   If there is no shared helper, create one: drawObjectBallPrediction(Ball target, Vec2 cueCenterAtImpact, Vec2 dirIncoming)
+   and call it from BOTH segment1-ball-hit and segment2-ball-hit.
+3) Make sure you compute cueCenterAtImpact correctly for segment2 (even if you use an epsilon start offset, keep it consistent with the tHit used).
+4) Run: .\mvnw.cmd test
+5) Print changed files + brief explanation.
 
-Define cloth nap direction (e.g., slightly toward top-left).
-
-Modulate cloth brightness by dot(lightDir, napDir).
-
-Very subtle (~3–5% variation).
-
-Add slight anisotropic streaking in noise (stretch noise texture slightly along nap direction).
-
-B) Contact shadow realism
-
-Replace perfect radial shadow with:
-
-Slightly elliptical shape aligned opposite light direction.
-
-Blur radius increases slightly with ball speed.
-
-Shadow intensity increases when ball is near a rail (simulate occlusion).
-
-C) Ambient occlusion at rails
-
-Darken cloth slightly within ~1.5 ball radii of rails.
-
-Add darker ring around pocket mouths.
-
-D) Ball surface imperfection
-
-Add very subtle procedural speckle noise overlay to balls (low opacity).
-
-Slight rim darkening (Fresnel-like effect): darken edges of sphere by ~5%.
-
-E) Highlight improvement
-
-Specular highlight should depend on light direction and ball normal.
-
-Reduce highlight size slightly and increase contrast.
-
-Add debug key L to toggle advanced lighting effects.
-
-Keep performance good. Cache textures. No JavaFX 3D.
+Goal: end of 2nd yellow line on ball hit always spawns the white object-ball line.
+'@

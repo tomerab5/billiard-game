@@ -255,6 +255,10 @@ public final class PhysicsWorld {
         }
 
         for (BallBody ballBody : balls) {
+            double pocketDamping = pocketModel.captureApproachDamping(ballBody.position, ballBody.radius, dtSeconds);
+            if (pocketDamping < 1.0) {
+                ballBody.velocity = ballBody.velocity.mul(pocketDamping);
+            }
             applyClothInteraction(ballBody, dtSeconds);
             integrateOrientation(ballBody, dtSeconds);
         }
@@ -437,7 +441,7 @@ public final class PhysicsWorld {
     }
 
     private boolean isPotted(BallBody body) {
-        return pocketModel.isPotted(body.position);
+        return pocketModel.isPotted(body.position, body.radius);
     }
 
     private void applyClothInteraction(BallBody ballBody, double dtSeconds) {
@@ -597,6 +601,7 @@ public final class PhysicsWorld {
     }
 
     private static final class PocketModel {
+        private static final double LIP_MARGIN = 0.25;
         private final double left;
         private final double right;
         private final double top;
@@ -673,22 +678,46 @@ public final class PhysicsWorld {
             return inLeftOpening(y);
         }
 
-        private boolean isPotted(Vector2 p) {
-            double captureRadius = mouthHalf * 0.68;
-            Vector2[] centers = new Vector2[] {
-                    new Vector2(left, top),
-                    new Vector2(cx, top),
-                    new Vector2(right, top),
-                    new Vector2(left, bottom),
-                    new Vector2(cx, bottom),
-                    new Vector2(right, bottom)
-            };
-            for (Vector2 center : centers) {
-                if (p.sub(center).length() <= captureRadius) {
-                    return true;
-                }
+        private boolean isPotted(Vector2 p, double ballRadius) {
+            return isPottedAt(p, ballRadius, new Vector2(left, top), cornerMouth)
+                    || isPottedAt(p, ballRadius, new Vector2(cx, top), mouthHalf)
+                    || isPottedAt(p, ballRadius, new Vector2(right, top), cornerMouth)
+                    || isPottedAt(p, ballRadius, new Vector2(left, bottom), cornerMouth)
+                    || isPottedAt(p, ballRadius, new Vector2(cx, bottom), mouthHalf)
+                    || isPottedAt(p, ballRadius, new Vector2(right, bottom), cornerMouth);
+        }
+
+        private double captureApproachDamping(Vector2 p, double ballRadius, double dtSeconds) {
+            double damping = 1.0;
+            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(left, top), cornerMouth));
+            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(cx, top), mouthHalf));
+            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(right, top), cornerMouth));
+            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(left, bottom), cornerMouth));
+            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(cx, bottom), mouthHalf));
+            damping = Math.min(damping, approachDampingAt(p, ballRadius, dtSeconds, new Vector2(right, bottom), cornerMouth));
+            return damping;
+        }
+
+        private boolean isPottedAt(Vector2 p, double ballRadius, Vector2 center, double pocketRadius) {
+            double captureRadius = pocketRadius - ballRadius - (ballRadius * LIP_MARGIN);
+            if (captureRadius <= 0.0) {
+                return false;
             }
-            return false;
+            return p.sub(center).length() <= captureRadius;
+        }
+
+        private double approachDampingAt(Vector2 p, double ballRadius, double dtSeconds, Vector2 center, double pocketRadius) {
+            double entryRadius = pocketRadius - ballRadius;
+            if (entryRadius <= 0.0) {
+                return 1.0;
+            }
+            double dist = p.sub(center).length();
+            if (dist >= entryRadius) {
+                return 1.0;
+            }
+            double depth = 1.0 - (dist / entryRadius);
+            double dampingRate = 0.28 * depth;
+            return Math.max(0.0, 1.0 - (dampingRate * dtSeconds));
         }
     }
 }
