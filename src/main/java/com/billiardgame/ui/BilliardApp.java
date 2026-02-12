@@ -40,11 +40,11 @@ public final class BilliardApp extends Application {
     private static final double TABLE_Y = 60;
     private static final double TABLE_WIDTH = 800;
     private static final double TABLE_HEIGHT = 420;
-    private static final double POCKET_RADIUS = 18;
     private static final double PIXELS_PER_METER = TABLE_WIDTH / PhysicsConfig.TABLE_WIDTH_M;
+    private static final double POCKET_RADIUS = PhysicsConfig.CORNER_POCKET_RADIUS_M * PIXELS_PER_METER;
     private static final double BALL_RADIUS_PX = PhysicsConfig.BALL_RADIUS_M * PIXELS_PER_METER;
 
-    private static final double FIXED_DT_SECONDS = 1.0 / 120.0;
+    private static final double FIXED_DT_SECONDS = PhysicsConfig.FIXED_TIME_STEP_SECONDS;
     private static final double PREDICTION_MAX_DISTANCE = 1400.0;
     private static final double POST_COLLISION_PREVIEW_DISTANCE = 260.0;
     private static final double RAYCAST_EPSILON_PX = 0.5;
@@ -167,9 +167,9 @@ public final class BilliardApp extends Application {
             if (event.getCode() == KeyCode.R) {
                 resetWorld();
             } else if (event.getCode() == KeyCode.OPEN_BRACKET) {
-                world.decreaseRollingFriction(0.001);
+                world.decreaseRollingFriction(PhysicsConfig.ROLLING_FRICTION_UI_STEP);
             } else if (event.getCode() == KeyCode.CLOSE_BRACKET) {
-                world.increaseRollingFriction(0.001);
+                world.increaseRollingFriction(PhysicsConfig.ROLLING_FRICTION_UI_STEP);
             } else if (event.getCode() == KeyCode.T) {
                 showSpinDebug = !showSpinDebug;
             } else if (event.getCode() == KeyCode.O) {

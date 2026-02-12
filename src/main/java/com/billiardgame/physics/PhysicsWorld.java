@@ -6,8 +6,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class PhysicsWorld {
-    private static final double COLLISION_EPS = 1e-9;
-
     public enum MotionMode {
         SLIDING,
         ROLLING
@@ -330,14 +328,14 @@ public final class PhysicsWorld {
         Vector3 t3 = toVec3(t);
 
         double kN = invMass + cross(r, n3).lengthSq() * invI;
-        double jn = -(1.0 + PhysicsConfig.RAIL_RESTITUTION) * vn / kN;
+        double jn = -(1.0 + PhysicsConfig.CUSHION_RESTITUTION) * vn / kN;
 
         double vt = dot(vContact, t);
         double jt = 0.0;
         if (Math.abs(vt) > PhysicsConfig.BALL_COLLISION_TANGENTIAL_EPS_M_PER_S) {
             double kT = invMass + cross(r, t3).lengthSq() * invI;
             double jtUnclamped = -vt / kT;
-            double jtMax = PhysicsConfig.MU_RAIL * jn;
+            double jtMax = PhysicsConfig.MU_CUSHION * jn;
             jt = Math.max(-jtMax, Math.min(jtMax, jtUnclamped));
         }
 
@@ -361,7 +359,7 @@ public final class PhysicsWorld {
 
                 double distance = Math.sqrt(Math.max(distSq, 0.0));
                 Vector2 normal;
-                if (distance > COLLISION_EPS) {
+                if (distance > PhysicsConfig.COLLISION_EPS) {
                     normal = delta.mul(1.0 / distance);
                 } else {
                     normal = new Vector2(1.0, 0.0);
@@ -421,7 +419,7 @@ public final class PhysicsWorld {
     }
 
     private static double inertia(double mass, double radius) {
-        return (2.0 / 5.0) * mass * radius * radius;
+        return PhysicsConfig.SOLID_SPHERE_INERTIA_SCALE * mass * radius * radius;
     }
 
     private static double dot(Vector2 a, Vector2 b) {
@@ -475,7 +473,8 @@ public final class PhysicsWorld {
             Vector3 nextAngularVelocity = new Vector3(wx, wy, wz);
 
             Vector2 nextSlip = nextVelocity.add(new Vector2(-ballBody.radius * nextAngularVelocity.y(), ballBody.radius * nextAngularVelocity.x()));
-            if (nextSlip.length() <= (PhysicsConfig.SLIP_EPS_M_PER_S * 1.5) || nextVelocity.length() <= 0.35) {
+            if (nextSlip.length() <= (PhysicsConfig.SLIP_EPS_M_PER_S * PhysicsConfig.SLIP_TO_ROLLING_EPS_SCALE)
+                    || nextVelocity.length() <= PhysicsConfig.SLIP_TO_ROLLING_SPEED_M_PER_S) {
                 double rollingSpeed = nextVelocity.length();
                 Vector2 rollingVelocity = rollingSpeed > 0.0 ? nextVelocity.normalized().mul(rollingSpeed) : Vector2.ZERO;
                 ballBody.velocity = rollingVelocity;
@@ -528,7 +527,7 @@ public final class PhysicsWorld {
         Vector3 w = body.angularVelocity;
         double omega = w.length();
         double angle = omega * dtSeconds;
-        if (angle < 1e-8) {
+        if (angle < PhysicsConfig.ORIENTATION_INTEGRATION_EPS_RAD) {
             return;
         }
         Vector3 axis = w.normalized();
@@ -601,7 +600,6 @@ public final class PhysicsWorld {
     }
 
     private static final class PocketModel {
-        private static final double LIP_MARGIN = 0.25;
         private final double left;
         private final double right;
         private final double top;
@@ -632,10 +630,10 @@ public final class PhysicsWorld {
             double top = b.top();
             double bottom = b.bottom();
             double cx = (left + right) * 0.5;
-            double mouthHalf = ballRadius * 2.2;
-            double cornerMouth = ballRadius * 2.9;
-            double dropDepth = ballRadius * 1.55;
-            double jawR = ballRadius * 0.92;
+            double mouthHalf = ballRadius * PhysicsConfig.POCKET_SIDE_MOUTH_HALF_MULTIPLIER;
+            double cornerMouth = ballRadius * PhysicsConfig.POCKET_CORNER_MOUTH_MULTIPLIER;
+            double dropDepth = ballRadius * PhysicsConfig.POCKET_DROP_DEPTH_MULTIPLIER;
+            double jawR = ballRadius * PhysicsConfig.POCKET_JAW_RADIUS_MULTIPLIER;
 
             List<Segment2> segs = new ArrayList<>();
             segs.add(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(cx - mouthHalf, top)));
@@ -699,7 +697,7 @@ public final class PhysicsWorld {
         }
 
         private boolean isPottedAt(Vector2 p, double ballRadius, Vector2 center, double pocketRadius) {
-            double captureRadius = pocketRadius - ballRadius - (ballRadius * LIP_MARGIN);
+            double captureRadius = pocketRadius - ballRadius - (ballRadius * PhysicsConfig.POCKET_CAPTURE_LIP_MARGIN);
             if (captureRadius <= 0.0) {
                 return false;
             }
@@ -716,7 +714,7 @@ public final class PhysicsWorld {
                 return 1.0;
             }
             double depth = 1.0 - (dist / entryRadius);
-            double dampingRate = 0.28 * depth;
+            double dampingRate = PhysicsConfig.POCKET_APPROACH_DAMPING_RATE * depth;
             return Math.max(0.0, 1.0 - (dampingRate * dtSeconds));
         }
     }
