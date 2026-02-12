@@ -1,32 +1,53 @@
 codex @'
-POCKET FACINGS TOO STRONG: No shot can enter. Ball touches mouth corner and jumps out.
+POCKET TUNING: side-entry pushed away + hanger balls don't fall
 
-Goal:
-- Near-miss bounces back.
-- True entry goes in (cannot be ejected by facings once past the rail line).
-- Keep no-escape guard as fallback only after passing deeper threshold.
+Symptoms:
+1) Balls entering from the side get pushed back out (facings repel too much).
+2) Ball can sit partially in pocket mouth and never "falls" in (needs hanger capture / funnel).
+
+Goals:
+- Facings: near-miss bounces OUT, but true entries are NOT repelled.
+- Hanger: if ball is sufficiently over the drop and slow, it transitions to ENTERING_POCKET and is pulled/damped in.
 
 Do:
-1) Locate facing collision code and facing geometry:
-   rg -n "facing|facings|POCKET_MOUTH|jaw|restitution|friction|one[- ]sided|normal" src/main/java/com/billiardgame/physics/PhysicsWorld.java src/main/java/com/billiardgame/physics/PhysicsConfig.java
+A) Fix facing collision response to avoid "push away"
+1) Ensure facing normals are correct and stable:
+   - For each facing segment, compute n = perp(normalize(b-a)).
+   - Choose sign so n points toward table interior:
+     - pick a test point = closestPoint + n * (ballR*0.25)
+     - if test point is NOT inside bed rect -> flip n
+2) One-sided resolve:
+   - only if signedDistance < 0 AND dot(v, n) < 0 (approaching)
+3) Set facing material to be non-trampoline:
+   - Add PhysicsConfig.POCKET_FACING_RESTITUTION (default 0.08)
+   - Add PhysicsConfig.POCKET_FACING_FRICTION (default 0.35–0.6)
+   - Use these for facing collisions (not rail restitution)
 
-2) Fix facing material response:
-   - Set facing restitution LOW (e.g. 0.1 default) and friction higher.
-   - Use separate constants if needed: POCKET_FACING_RESTITUTION, POCKET_FACING_FRICTION.
+B) Add hanger capture + funnel (2D approximation of gravity/slope)
+1) Add config:
+   - POCKET_HANGER_SPEED_M_PER_S (e.g. 0.15)
+   - POCKET_HANGER_CAPTURE_DEPTH (fraction of ballR, e.g. 0.35)
+   - POCKET_FUNNEL_ACCEL_M_PER_S2 (e.g. 2.5)
+2) For ON_TABLE balls each step:
+   - find nearest pocket center + mouthRadius
+   - if distToCenter <= mouthRadius - ballR*POCKET_HANGER_CAPTURE_DEPTH
+     AND |v| <= POCKET_HANGER_SPEED_M_PER_S:
+        transition to ENTERING_POCKET and store that pocket center for the ball
+3) In ENTERING_POCKET update:
+   - apply strong damping (existing approach damping ok)
+   - add inward acceleration: v += dirToCenter * POCKET_FUNNEL_ACCEL_M_PER_S2 * dt
+   - clamp max speed while entering (so it doesn't slingshot)
+   - once distToCenter <= (mouthRadius - ballR*0.75) OR timeEntering > 0.6s:
+       set IN_POCKET/REMOVED (existing behavior)
 
-3) Fix facing geometry so it does NOT intrude into bed:
-   - Anchor at the rail-gap endpoints.
-   - Second endpoint should be in the direction toward pocket center BUT ensure it lies OUTSIDE the bed (or behind the rail line).
-   - In debug (P), draw facings and their normals.
+C) Debug so we can see what's happening:
+- Overlay line showing for nearest pocket:
+  distToCenter, mouthRadius, hangerEligible(true/false), lastFacingHitPocketId
 
-4) Critical: disable facing collisions once ball is already inside the mouth:
-   - Define bed rect (minX/maxX/minY/maxY).
-   - For each facing collision candidate, if ball center is already outside the bed by > small eps OR is closer to pocket center than the rail-line by threshold, SKIP facing collision.
-   (Meaning: facings only affect balls still on the bed side.)
+Commands to locate/edit:
+- rg -n "facing|facings|one[- ]sided|signedDistance|Pocket|ENTERING_POCKET|IN_POCKET|no-escape|capture" src/main/java/com/billiardgame/physics/PhysicsWorld.java
+- rg -n "overlay|debug|P\\b|O\\b|RAILS" src/main/java/com/billiardgame/ui/BilliardApp.java
 
-5) One-sided collision correctness:
-   - Only resolve if signedDistance < 0 AND vn = dot(v, normal) < 0 (approaching).
-   - Ensure normal points toward bed interior.
-
-6) Adjust no-escape guard to trigger deeper:
-   - Only convert to ENTERING_POCKET if bal_
+Run: .\\mvnw.cmd test
+Output: changed files + new PhysicsConfig constants + the hanger condition.
+'@
