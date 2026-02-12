@@ -1,55 +1,47 @@
 codex @'
-BUG: cue ball can get stuck inside a pocket, seems to happen after the other ball is removed.
-Likely causes:
-- cue ball identification based on list index/order (breaks after removals)
-- pocket state tracking keyed by list index (breaks after removals)
-- "world at rest" check includes removed/in-pocket balls incorrectly so scratch respawn never triggers
-- pocket finalize step not executed for IN_POCKET balls with near-zero velocity
+BUG: Balls that reach a pocket keep going and leave the table (escape the world).
 
-Goal:
-- Cue ball can NEVER remain stuck in ENTERING_POCKET/IN_POCKET indefinitely.
-- Scratch behavior must trigger reliably regardless of other balls being removed.
+Goal: ON_TABLE balls must NEVER escape the simulation.
+If a ball exits bed bounds near a pocket mouth, treat it as entering the pocket (ENTERING_POCKET) and apply damping/funnel. If it exits elsewhere, clamp/reflect (should not happen).
 
 Acceptance (manual):
-1) Pot red ball, then pot cue ball in any pocket -> cue ball respawns after rest (no stuck).
-2) Pot cue ball first -> respawns after rest.
-3) No behavior depends on ball list index/order.
+- No ball can travel outside the table forever.
+- A ball that passes through a pocket opening transitions to ENTERING_POCKET and gets damped inward (eventually captured/removed).
+- Side/corner near-misses still bounce once we add facings later, but for now: no escape.
 
 Do:
-1) Find how cue ball is identified:
-   rg -n "cueBall|isCue|CUE|balls\\.get\\(0\\)|indexOf\\(|ballId|type" src/main/java/com/billiardgame
+1) Find bed bounds and pocket centers/radii used by PocketModel:
+   rg -n "bedMin|bedMax|table.*Min|table.*Max|PocketModel|pocketCenters|corner|side.*pocket" src/main/java/com/billiardgame/physics/PhysicsWorld.java
 
-2) Ensure cue ball identity is stable:
-   - If Ball has type/flag/id: use that (e.g., BallType.CUE or isCueBall()).
-   - If not, add a stable field (ballId and/or boolean isCue) set at creation time.
+2) Implement helper:
+   - PocketHit classifyPocketExit(Vector2 p, double ballR)
+     returns nearest pocket center + mouthRadius + type if p is within (mouthRadius + ballR*1.5)
 
-3) Find pocket state tracking / maps:
-   rg -n "ENTERING_POCKET|IN_POCKET|REMOVED|pocketCenter|timeInPocket|Map<|HashMap" src/main/java/com/billiardgame/physics/PhysicsWorld.java
-   Ensure any per-ball tracking is keyed by stable ballId (NOT list index).
+3) In PhysicsWorld.step(...) AFTER integration + normal collisions, for each ball with state ON_TABLE:
+   - if outside bed bounds by eps (e.g. ballR*0.25):
+       - PocketHit hit = classifyPocketExit(p, ballR)
+       - if hit != null:
+           set state=ENTERING_POCKET
+           store target pocket center for that ball
+           apply immediate damping: v*=0.5, omega*=0.5 (or config)
+       - else:
+           clamp position back inside bed and reflect velocity (debug safety)
 
-4) Add a 'timeInPocketState' accumulator per ball (or per ballId).
-   - increment while state != ON_TABLE
-   - reset on ON_TABLE
+4) In ENTERING_POCKET update:
+   - apply strong damping each step
+   - apply small acceleration toward pocket center (funnel) so it can’t drift away
+   - after a short time or when within capture radius, transition to IN_POCKET/REMOVED (existing logic)
 
-5) Add a watchdog finalize:
-   - If ball.state == IN_POCKET or ENTERING_POCKET AND (|v| < eps && |omega| < eps) for > 0.25s OR timeInPocketState > 2.0s:
-       - If cue ball -> set scratchPending = true and mark ball as REMOVED (or keep hidden) so it cannot collide/render stuck
-       - If object ball -> mark REMOVED and remove from active collision list
-   This prevents 'stuck forever' even if some gate fails.
+5) Add debug counter on overlay (P or O):
+   - pocketEscapesCaught++
+   - pocketEscapesClamped++
+   so we can confirm the guard triggers.
 
-6) Fix "world at rest" detection used for scratch respawn:
-   - Should ignore REMOVED balls.
-   - Should consider ON_TABLE balls only (or ON_TABLE + ENTERING) but must allow rest to become true.
-   - After rest AND scratchPending -> respawn cue ball ON_TABLE.
+6) Run: .\mvnw.cmd test
 
-7) Add debug overlay line (toggle key O or P):
-   - for each ball: id/type/state + timeInPocketState
-   so we can see if it’s failing to finalize.
-
-Run: .\mvnw.cmd test
 Output:
 - Changed files
-- How cue ball is identified now (no index assumptions)
-- How pocket tracking is keyed
-- Watchdog condition
+- The exact outside-bounds condition
+- The pocket classification radius used
+- Debug counters location
 '@

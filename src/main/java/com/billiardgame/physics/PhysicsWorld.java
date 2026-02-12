@@ -35,6 +35,8 @@ public final class PhysicsWorld {
     private int pocketEscapeGuardHits;
     private int pocketEscapeGuardLastPocketId;
     private String pocketEscapeGuardLastPocketType;
+    private int pocketEscapesCaught;
+    private int pocketEscapesClamped;
     private final boolean scratchEnabled;
     private boolean scratchPending;
     private boolean cueBallRespawnedThisStep;
@@ -88,6 +90,30 @@ public final class PhysicsWorld {
         }
     }
 
+    public static final class DebugFacing {
+        private final Vector2 a;
+        private final Vector2 b;
+        private final Vector2 normal;
+
+        public DebugFacing(Vector2 a, Vector2 b, Vector2 normal) {
+            this.a = a;
+            this.b = b;
+            this.normal = normal;
+        }
+
+        public Vector2 a() {
+            return a;
+        }
+
+        public Vector2 b() {
+            return b;
+        }
+
+        public Vector2 normal() {
+            return normal;
+        }
+    }
+
     public PhysicsWorld(List<Ball> initialBalls, TableBounds bounds) {
         this(initialBalls, bounds, 1.0);
     }
@@ -130,6 +156,8 @@ public final class PhysicsWorld {
         this.pocketEscapeGuardHits = 0;
         this.pocketEscapeGuardLastPocketId = -1;
         this.pocketEscapeGuardLastPocketType = "none";
+        this.pocketEscapesCaught = 0;
+        this.pocketEscapesClamped = 0;
         this.scratchEnabled = initialBalls.size() > 1;
         this.scratchPending = false;
         this.cueBallRespawnedThisStep = false;
@@ -296,6 +324,11 @@ public final class PhysicsWorld {
 
     public List<String> ballPocketDebugLines() {
         List<String> out = new ArrayList<>();
+        out.add(String.format(
+                "pocketEscapes caught=%d clamped=%d",
+                pocketEscapesCaught,
+                pocketEscapesClamped
+        ));
         for (BallBody body : balls) {
             out.add(String.format(
                     "id=%d type=%s state=%s tPocket=%.2f",
@@ -348,6 +381,14 @@ public final class PhysicsWorld {
         return pocketEscapeGuardLastPocketType;
     }
 
+    public int pocketEscapesCaught() {
+        return pocketEscapesCaught;
+    }
+
+    public int pocketEscapesClamped() {
+        return pocketEscapesClamped;
+    }
+
     public List<DebugArc> pocketJawArcsPx() {
         List<DebugArc> out = new ArrayList<>();
         for (ArcJaw a : pocketModel.jawArcs) {
@@ -360,6 +401,18 @@ public final class PhysicsWorld {
         List<DebugSegment> out = new ArrayList<>();
         for (FacingSegment s : pocketModel.facingSegments) {
             out.add(new DebugSegment(toPixels(s.segment.a), toPixels(s.segment.b)));
+        }
+        return List.copyOf(out);
+    }
+
+    public List<DebugFacing> pocketFacingsPx() {
+        List<DebugFacing> out = new ArrayList<>();
+        for (FacingSegment s : pocketModel.facingSegments) {
+            out.add(new DebugFacing(
+                    toPixels(s.segment.a),
+                    toPixels(s.segment.b),
+                    s.bedSideNormal
+            ));
         }
         return List.copyOf(out);
     }
@@ -435,13 +488,19 @@ public final class PhysicsWorld {
             }
             ballBody.timeInPocketState = 0.0;
             ballBody.pocketStillTimer = 0.0;
+            containOnTableBall(ballBody);
+            if (ballBody.pocketState != BallPocketState.ON_TABLE) {
+                continue;
+            }
             double pocketDamping = pocketModel.captureApproachDamping(ballBody.position, ballBody.radius, dtSeconds);
             if (pocketDamping < 1.0) {
                 ballBody.velocity = ballBody.velocity.mul(pocketDamping);
             }
             applyClothInteraction(ballBody, dtSeconds);
             integrateOrientation(ballBody, dtSeconds);
-            applyPocketEscapeGuard(ballBody);
+            if (PhysicsConfig.POCKET_ESCAPE_GUARD_ENABLED) {
+                applyPocketEscapeGuard(ballBody);
+            }
             if (ballBody.pocketState != BallPocketState.ON_TABLE) {
                 continue;
             }
@@ -634,17 +693,100 @@ public final class PhysicsWorld {
             return;
         }
         for (FacingSegment fs : pocketModel.facingSegments) {
+            Vector2 closest = closestPointOnSegment(body.position, fs.segment);
             CollisionContact c = segmentCollision(body.position, body.radius, fs.segment);
             if (c == null) {
                 continue;
             }
             Vector2 inward = fs.bedSideNormal;
+            double signedDistanceToFacing = dot(body.position.sub(closest), inward);
+            if (signedDistanceToFacing <= 0.0) {
+                continue;
+            }
             if (dot(c.normal, inward) <= 0.0) {
+                continue;
+            }
+            Vector3 r = new Vector3(-inward.x() * body.radius, -inward.y() * body.radius, 0.0);
+            Vector3 vContact3 = toVec3(body.velocity).add(cross(body.angularVelocity, r));
+            Vector2 vContact = new Vector2(vContact3.x(), vContact3.y());
+            if (dot(vContact, inward) >= 0.0) {
                 continue;
             }
             body.position = body.position.add(inward.mul(c.penetration + 1e-6));
             applySurfaceImpulse(body, inward, PhysicsConfig.POCKET_JAW_RESTITUTION, PhysicsConfig.POCKET_JAW_FRICTION);
         }
+    }
+
+    private void containOnTableBall(BallBody body) {
+        double eps = body.radius * 0.25;
+        Vector2 p = body.position;
+        boolean outside = p.x() < bedMinX - eps
+                || p.x() > bedMaxX + eps
+                || p.y() < bedMinY - eps
+                || p.y() > bedMaxY + eps;
+        if (!outside) {
+            return;
+        }
+        PocketHit pocketHit = classifyPocketExit(p, body.radius);
+        if (pocketHit != null) {
+            body.pocketState = BallPocketState.ENTERING_POCKET;
+            body.pocketCenter = pocketHit.center;
+            body.velocity = body.velocity.mul(0.5);
+            body.angularVelocity = body.angularVelocity.mul(0.5);
+            body.pocketTimer = 0.0;
+            body.pocketEscapeGuarded = true;
+            if (body.isCue && scratchEnabled) {
+                scratchPending = true;
+            }
+            pocketEscapesCaught++;
+            pocketEscapeGuardHits++;
+            pocketEscapeGuardLastPocketId = pocketHit.pocketId;
+            pocketEscapeGuardLastPocketType = pocketHit.sidePocket ? "SIDE" : "CORNER";
+            return;
+        }
+
+        double insidePad = body.radius * 0.05;
+        double clampedX = Math.max(bedMinX + insidePad, Math.min(bedMaxX - insidePad, p.x()));
+        double clampedY = Math.max(bedMinY + insidePad, Math.min(bedMaxY - insidePad, p.y()));
+        double vx = body.velocity.x();
+        double vy = body.velocity.y();
+        if (p.x() < bedMinX - eps || p.x() > bedMaxX + eps) {
+            vx = -vx * 0.65;
+        }
+        if (p.y() < bedMinY - eps || p.y() > bedMaxY + eps) {
+            vy = -vy * 0.65;
+        }
+        body.position = new Vector2(clampedX, clampedY);
+        body.velocity = new Vector2(vx, vy);
+        pocketEscapesClamped++;
+    }
+
+    private PocketHit classifyPocketExit(Vector2 p, double ballR) {
+        PocketRegion nearest = pocketModel.nearestPocketRegion(p);
+        if (nearest == null) {
+            return null;
+        }
+        double triggerRadius = nearest.radius + (ballR * 1.5);
+        if (p.sub(nearest.center).length() > triggerRadius) {
+            return null;
+        }
+        return new PocketHit(
+                nearest.center,
+                nearest.radius,
+                nearest.sidePocket,
+                pocketModel.pocketIndex(nearest)
+        );
+    }
+
+    private static Vector2 closestPointOnSegment(Vector2 center, Segment2 seg) {
+        Vector2 ab = seg.b.sub(seg.a);
+        double abLenSq = ab.lengthSq();
+        if (abLenSq <= 1e-12) {
+            return seg.a;
+        }
+        double t = dot(center.sub(seg.a), ab) / abLenSq;
+        t = Math.max(0.0, Math.min(1.0, t));
+        return seg.a.add(ab.mul(t));
     }
 
     private static CollisionContact segmentCollision(Vector2 center, double radius, Segment2 seg) {
@@ -804,12 +946,12 @@ public final class PhysicsWorld {
         body.timeInPocketState += dtSeconds;
         if (body.pocketCenter != null) {
             Vector2 toCenter = body.pocketCenter.sub(body.position);
-            double pullRate = body.pocketEscapeGuarded ? 4.2 : 8.0;
+            double pullRate = body.pocketEscapeGuarded ? 6.2 : 8.0;
             body.position = body.position.add(toCenter.mul(Math.min(1.0, dtSeconds * pullRate)));
             double dist = toCenter.length();
             if (dist > 1e-9) {
                 Vector2 inward = toCenter.mul(1.0 / dist);
-                double inwardAccel = body.pocketEscapeGuarded ? 1.2 : 0.0;
+                double inwardAccel = body.pocketEscapeGuarded ? 1.8 : 0.7;
                 if (inwardAccel > 0.0) {
                     body.velocity = body.velocity.add(inward.mul(inwardAccel * dtSeconds));
                 }
@@ -817,10 +959,10 @@ public final class PhysicsWorld {
         }
         double linerDamping = body.pocketEscapeGuarded
                 ? (10.0 + (PhysicsConfig.POCKET_LINER_FRICTION * 10.0))
-                : (6.5 + (PhysicsConfig.POCKET_LINER_FRICTION * 7.0));
+                : (8.0 + (PhysicsConfig.POCKET_LINER_FRICTION * 8.0));
         double spinDamping = body.pocketEscapeGuarded
                 ? (10.5 + (PhysicsConfig.POCKET_LINER_FRICTION * 11.0))
-                : (6.5 + (PhysicsConfig.POCKET_LINER_FRICTION * 8.0));
+                : (8.2 + (PhysicsConfig.POCKET_LINER_FRICTION * 8.4));
         body.velocity = body.velocity.mul(Math.max(0.0, 1.0 - linerDamping * dtSeconds));
         body.angularVelocity = body.angularVelocity.mul(Math.max(0.0, 1.0 - spinDamping * dtSeconds));
         body.velocity = body.velocity.mul(PhysicsConfig.POCKET_LINER_RESTITUTION);
@@ -1136,6 +1278,20 @@ public final class PhysicsWorld {
         }
     }
 
+    private static final class PocketHit {
+        private final Vector2 center;
+        private final double mouthRadius;
+        private final boolean sidePocket;
+        private final int pocketId;
+
+        private PocketHit(Vector2 center, double mouthRadius, boolean sidePocket, int pocketId) {
+            this.center = center;
+            this.mouthRadius = mouthRadius;
+            this.sidePocket = sidePocket;
+            this.pocketId = pocketId;
+        }
+    }
+
     private static final class PocketModel {
         private final double left;
         private final double right;
@@ -1181,6 +1337,13 @@ public final class PhysicsWorld {
             double jawR = ballRadius * PhysicsConfig.POCKET_JAW_RADIUS_MULTIPLIER;
             double cornerCenterOffset = cornerMouth;
             double sideCenterOffset = mouthHalf;
+            double facingLength = Math.max(ballRadius * 0.55, dropDepth * 0.55);
+            Vector2 topLeftCenter = new Vector2(left - cornerCenterOffset, top - cornerCenterOffset);
+            Vector2 topMiddleCenter = new Vector2(cx, top - sideCenterOffset);
+            Vector2 topRightCenter = new Vector2(right + cornerCenterOffset, top - cornerCenterOffset);
+            Vector2 bottomLeftCenter = new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset);
+            Vector2 bottomMiddleCenter = new Vector2(cx, bottom + sideCenterOffset);
+            Vector2 bottomRightCenter = new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset);
 
             List<RailSegment> segs = new ArrayList<>();
             addRailSegment(segs, new Vector2(left + cornerMouth, top), new Vector2(cx - mouthHalf, top), RailSide.TOP);
@@ -1194,14 +1357,18 @@ public final class PhysicsWorld {
             }
 
             List<FacingSegment> facings = new ArrayList<>();
-            facings.add(new FacingSegment(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(right - cornerMouth, top), new Vector2(right - dropDepth, top + cornerMouth)), new Vector2(-1, 1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(left + cornerMouth, bottom), new Vector2(left + dropDepth, bottom - cornerMouth)), new Vector2(1, -1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(right - cornerMouth, bottom), new Vector2(right - dropDepth, bottom - cornerMouth)), new Vector2(-1, -1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(cx - mouthHalf, top), new Vector2(cx - mouthHalf, top + dropDepth)), new Vector2(0, 1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(cx + mouthHalf, top), new Vector2(cx + mouthHalf, top + dropDepth)), new Vector2(0, 1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(cx - mouthHalf, bottom), new Vector2(cx - mouthHalf, bottom - dropDepth)), new Vector2(0, -1)));
-            facings.add(new FacingSegment(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(cx + mouthHalf, bottom - dropDepth)), new Vector2(0, -1)));
+            addFacingFromAnchor(facings, new Vector2(left + cornerMouth, top), topLeftCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(left, top + cornerMouth), topLeftCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(cx - mouthHalf, top), topMiddleCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(cx + mouthHalf, top), topMiddleCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(right - cornerMouth, top), topRightCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(right, top + cornerMouth), topRightCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(left, bottom - cornerMouth), bottomLeftCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(left + cornerMouth, bottom), bottomLeftCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(cx - mouthHalf, bottom), bottomMiddleCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(cx + mouthHalf, bottom), bottomMiddleCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(right, bottom - cornerMouth), bottomRightCenter, facingLength);
+            addFacingFromAnchor(facings, new Vector2(right - cornerMouth, bottom), bottomRightCenter, facingLength);
 
             List<ShelfLine> shelves = new ArrayList<>();
             shelves.add(new ShelfLine(new Segment2(new Vector2(left + cornerMouth, top + dropDepth), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
@@ -1226,12 +1393,12 @@ public final class PhysicsWorld {
             jaws.add(new ArcJaw(new Vector2(cx + mouthHalf, bottom - jawR), jawR, 0, 90));
 
             List<PocketRegion> regions = new ArrayList<>();
-            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, top - cornerCenterOffset), cornerMouth, false));
-            regions.add(new PocketRegion(new Vector2(cx, top - sideCenterOffset), mouthHalf, true));
-            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, top - cornerCenterOffset), cornerMouth, false));
-            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth, false));
-            regions.add(new PocketRegion(new Vector2(cx, bottom + sideCenterOffset), mouthHalf, true));
-            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth, false));
+            regions.add(new PocketRegion(topLeftCenter, cornerMouth, false));
+            regions.add(new PocketRegion(topMiddleCenter, mouthHalf, true));
+            regions.add(new PocketRegion(topRightCenter, cornerMouth, false));
+            regions.add(new PocketRegion(bottomLeftCenter, cornerMouth, false));
+            regions.add(new PocketRegion(bottomMiddleCenter, mouthHalf, true));
+            regions.add(new PocketRegion(bottomRightCenter, cornerMouth, false));
 
             return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(facings), List.copyOf(shelves), List.copyOf(jaws), List.copyOf(regions));
         }
@@ -1241,6 +1408,20 @@ public final class PhysicsWorld {
                 return;
             }
             out.add(new RailSegment(new Segment2(a, b), side));
+        }
+
+        private static void addFacingFromAnchor(List<FacingSegment> out, Vector2 anchor, Vector2 pocketCenter, double facingLength) {
+            Vector2 toPocket = pocketCenter.sub(anchor);
+            if (toPocket.lengthSq() <= 1e-12) {
+                return;
+            }
+            Vector2 direction = toPocket.normalized();
+            Vector2 tip = anchor.add(direction.mul(facingLength));
+            Vector2 bedNormal = anchor.sub(pocketCenter);
+            if (bedNormal.lengthSq() <= 1e-12) {
+                return;
+            }
+            out.add(new FacingSegment(new Segment2(anchor, tip), bedNormal));
         }
 
         private int railSegmentCount() {

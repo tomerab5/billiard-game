@@ -371,8 +371,17 @@ public final class BilliardApp extends Application {
         }
         gc.setStroke(Color.color(1.0, 0.92, 0.36, 0.78));
         gc.setLineWidth(1.5);
-        for (PhysicsWorld.DebugSegment s : world.pocketFacingSegmentsPx()) {
-            gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+        for (PhysicsWorld.DebugFacing f : world.pocketFacingsPx()) {
+            gc.strokeLine(f.a().x(), f.a().y(), f.b().x(), f.b().y());
+            double midX = (f.a().x() + f.b().x()) * 0.5;
+            double midY = (f.a().y() + f.b().y()) * 0.5;
+            double normalLenPx = 14.0;
+            gc.strokeLine(
+                    midX,
+                    midY,
+                    midX + (f.normal().x() * normalLenPx),
+                    midY + (f.normal().y() * normalLenPx)
+            );
         }
         gc.setStroke(Color.color(0.95, 0.45, 0.80, 0.78));
         gc.setLineWidth(1.6);
@@ -410,8 +419,9 @@ public final class BilliardApp extends Application {
         gc.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
         gc.fillText(
                 String.format(
-                        "ESCAPE_GUARD hits=%d last=%s#%d",
-                        world.pocketEscapeGuardHits(),
+                        "POCKET_EXIT_GUARD caught=%d clamped=%d last=%s#%d",
+                        world.pocketEscapesCaught(),
+                        world.pocketEscapesClamped(),
                         world.pocketEscapeGuardLastPocketType(),
                         world.pocketEscapeGuardLastPocketId()
                 ),

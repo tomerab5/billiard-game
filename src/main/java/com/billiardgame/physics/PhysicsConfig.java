@@ -79,7 +79,9 @@ public final class PhysicsConfig {
     public static final double POCKET_LINER_RESTITUTION = 0.30;
     public static final double POCKET_LINER_FRICTION = 0.45;
     // Validation toggle: mouth-facing/jaw colliders can be disabled while checking pocket openings.
-    public static final boolean POCKET_MOUTH_COLLIDERS_ENABLED = false;
+    public static final boolean POCKET_MOUTH_COLLIDERS_ENABLED = true;
+    // Temporary debug safety switch; disabled by default for facings-first behavior validation.
+    public static final boolean POCKET_ESCAPE_GUARD_ENABLED = false;
 
     private PhysicsConfig() {
     }
