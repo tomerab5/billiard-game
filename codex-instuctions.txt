@@ -1,12 +1,26 @@
 codex @'
-TEST: Are yellow pocket mouth colliders blocking side pockets?
+CUE BALL SCRATCH FIX: cue ball gets captured and stays stuck in the hole. It must respawn so the player can continue.
 
-1) Add PhysicsConfig flag: POCKET_MOUTH_COLLIDERS_ENABLED (default false).
-2) In PhysicsWorld pocket collision resolution, guard ALL jaw/facing collision impulses with that flag:
-   - if (!POCKET_MOUTH_COLLIDERS_ENABLED) skip collisions against jawArcs + facingSegments
-   - keep rails + shelf/capture logic unchanged
-3) Keep drawing yellow shapes in P overlay (visual only).
-4) Run .\mvnw.cmd test
+Acceptance (manual):
+- If cue ball is potted, it behaves like a scratch:
+  - cue ball does NOT remain stuck forever
+  - after all balls stop, cue ball respawns on table and user can shoot again
+- Other balls remain removed when potted.
 
-Goal: With flag=false, balls should enter side pockets if yellow colliders were the blocker.
+Implement minimal rules (no full 8-ball rules):
+1) Add boolean scratchPending to game/UI controller state (where input state lives) or PhysicsWorld if easier.
+2) Detect cue ball capture (when ball type is CUE or id==0):
+   - set scratchPending=true
+   - allow the cue ball to go through the pocket drop animation / be IN_POCKET
+3) When world is at rest (all active balls speed < threshold) AND scratchPending:
+   - respawn cue ball at a safe default position (e.g., head spot or table center away from other balls)
+   - set v=0, omega=0, pocketZ=0, state=ON_TABLE, active=true
+   - clear scratchPending
+   - reset UI to AIMING and allow shot
+
+Also ensure:
+- Aim/shot code rejects cue ball only if it is not ON_TABLE; once respawned it must work.
+
+Run: .\mvnw.cmd test
+Output: changed files and where scratchPending is set/cleared and where cue ball respawns.
 '@
