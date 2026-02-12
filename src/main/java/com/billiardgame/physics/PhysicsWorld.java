@@ -250,8 +250,8 @@ public final class PhysicsWorld {
 
     public List<DebugSegment> pocketFacingSegmentsPx() {
         List<DebugSegment> out = new ArrayList<>();
-        for (Segment2 s : pocketModel.facingSegments) {
-            out.add(new DebugSegment(toPixels(s.a), toPixels(s.b)));
+        for (FacingSegment s : pocketModel.facingSegments) {
+            out.add(new DebugSegment(toPixels(s.segment.a), toPixels(s.segment.b)));
         }
         return List.copyOf(out);
     }
@@ -338,36 +338,47 @@ public final class PhysicsWorld {
     }
 
     private void resolveRailCollision(BallBody ballBody) {
+        if (pocketModel.isInPocketMouthOpenRegion(ballBody.position, ballBody.radius)) {
+            return;
+        }
         double r = ballBody.radius;
         double x = ballBody.position.x();
         double y = ballBody.position.y();
 
         if (x + r > bounds.right()) {
             if (!pocketModel.inRightOpening(y)) {
-                x = bounds.right() - r;
-                ballBody.position = new Vector2(x, y);
-                applyRailContactImpulse(ballBody, new Vector2(-1, 0));
+                if (ballBody.velocity.x() > 0.0) {
+                    x = bounds.right() - r;
+                    ballBody.position = new Vector2(x, y);
+                    applyRailContactImpulse(ballBody, new Vector2(-1, 0));
+                }
             }
         }
         if (x - r < bounds.left()) {
             if (!pocketModel.inLeftOpening(y)) {
-                x = bounds.left() + r;
-                ballBody.position = new Vector2(x, y);
-                applyRailContactImpulse(ballBody, new Vector2(1, 0));
+                if (ballBody.velocity.x() < 0.0) {
+                    x = bounds.left() + r;
+                    ballBody.position = new Vector2(x, y);
+                    applyRailContactImpulse(ballBody, new Vector2(1, 0));
+                }
             }
         }
         if (y + r > bounds.bottom()) {
             if (!pocketModel.inBottomOpening(x)) {
-                y = bounds.bottom() - r;
-                ballBody.position = new Vector2(x, y);
-                applyRailContactImpulse(ballBody, new Vector2(0, -1));
+                if (ballBody.velocity.y() > 0.0) {
+                    y = bounds.bottom() - r;
+                    ballBody.position = new Vector2(x, y);
+                    applyRailContactImpulse(ballBody, new Vector2(0, -1));
+                }
             }
         }
         if (y - r < bounds.top()) {
             if (!pocketModel.inTopOpening(x)) {
-                y = bounds.top() + r;
-                ballBody.position = new Vector2(x, y);
-                applyRailContactImpulse(ballBody, new Vector2(0, 1));
+                if (ballBody.velocity.y() < 0.0) {
+                    y = bounds.top() + r;
+                    ballBody.position = new Vector2(x, y);
+                    applyRailContactImpulse(ballBody, new Vector2(0, 1));
+                }
             }
         }
 
@@ -508,13 +519,17 @@ public final class PhysicsWorld {
         if (pocketModel.isInPocketMouthOpenRegion(body.position, body.radius)) {
             return;
         }
-        for (Segment2 s : pocketModel.facingSegments) {
-            CollisionContact c = segmentCollision(body.position, body.radius, s);
+        for (FacingSegment fs : pocketModel.facingSegments) {
+            CollisionContact c = segmentCollision(body.position, body.radius, fs.segment);
             if (c == null) {
                 continue;
             }
-            body.position = body.position.add(c.normal.mul(c.penetration + 1e-6));
-            applySurfaceImpulse(body, c.normal, PhysicsConfig.POCKET_JAW_RESTITUTION, PhysicsConfig.POCKET_JAW_FRICTION);
+            Vector2 inward = fs.bedSideNormal;
+            if (dot(c.normal, inward) <= 0.0) {
+                continue;
+            }
+            body.position = body.position.add(inward.mul(c.penetration + 1e-6));
+            applySurfaceImpulse(body, inward, PhysicsConfig.POCKET_JAW_RESTITUTION, PhysicsConfig.POCKET_JAW_FRICTION);
         }
     }
 
@@ -794,10 +809,22 @@ public final class PhysicsWorld {
     private static final class PocketRegion {
         private final Vector2 center;
         private final double radius;
+        private final boolean sidePocket;
 
-        private PocketRegion(Vector2 center, double radius) {
+        private PocketRegion(Vector2 center, double radius, boolean sidePocket) {
             this.center = center;
             this.radius = radius;
+            this.sidePocket = sidePocket;
+        }
+    }
+
+    private static final class FacingSegment {
+        private final Segment2 segment;
+        private final Vector2 bedSideNormal;
+
+        private FacingSegment(Segment2 segment, Vector2 bedSideNormal) {
+            this.segment = segment;
+            this.bedSideNormal = bedSideNormal.normalized();
         }
     }
 
@@ -821,12 +848,12 @@ public final class PhysicsWorld {
         private final double cornerMouth;
         private final double dropDepth;
         private final List<Segment2> mouthSegments;
-        private final List<Segment2> facingSegments;
+        private final List<FacingSegment> facingSegments;
         private final List<ShelfLine> shelfLines;
         private final List<ArcJaw> jawArcs;
         private final List<PocketRegion> pocketRegions;
 
-        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<Segment2> mouthSegments, List<Segment2> facingSegments, List<ShelfLine> shelfLines, List<ArcJaw> jawArcs, List<PocketRegion> pocketRegions) {
+        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<Segment2> mouthSegments, List<FacingSegment> facingSegments, List<ShelfLine> shelfLines, List<ArcJaw> jawArcs, List<PocketRegion> pocketRegions) {
             this.left = left;
             this.right = right;
             this.top = top;
@@ -848,9 +875,11 @@ public final class PhysicsWorld {
             double top = b.top();
             double bottom = b.bottom();
             double cx = (left + right) * 0.5;
-            double mouthHalf = ballRadius * PhysicsConfig.POCKET_SIDE_MOUTH_HALF_MULTIPLIER;
-            double cornerMouth = ballRadius * PhysicsConfig.POCKET_CORNER_MOUTH_MULTIPLIER;
-            double dropDepth = ballRadius * PhysicsConfig.POCKET_DROP_DEPTH_MULTIPLIER;
+            // Rail cutouts are driven by regulation mouth widths from PhysicsConfig.
+            double mouthHalf = PhysicsConfig.SIDE_POCKET_MOUTH_MIN_M * 0.5;
+            double cornerMouth = PhysicsConfig.CORNER_POCKET_MOUTH_MIN_M * 0.5;
+            // Shelf/depth proxy for capture geometry.
+            double dropDepth = Math.max(PhysicsConfig.CORNER_SHELF_MIN_M, ballRadius * PhysicsConfig.POCKET_DROP_DEPTH_MULTIPLIER);
             double jawR = ballRadius * PhysicsConfig.POCKET_JAW_RADIUS_MULTIPLIER;
             double cornerCenterOffset = cornerMouth;
             double sideCenterOffset = mouthHalf;
@@ -863,15 +892,15 @@ public final class PhysicsWorld {
             segs.add(new Segment2(new Vector2(left, top + cornerMouth), new Vector2(left, bottom - cornerMouth)));
             segs.add(new Segment2(new Vector2(right, top + cornerMouth), new Vector2(right, bottom - cornerMouth)));
 
-            List<Segment2> facings = new ArrayList<>();
-            facings.add(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(left + dropDepth, top + cornerMouth)));
-            facings.add(new Segment2(new Vector2(right - cornerMouth, top), new Vector2(right - dropDepth, top + cornerMouth)));
-            facings.add(new Segment2(new Vector2(left + cornerMouth, bottom), new Vector2(left + dropDepth, bottom - cornerMouth)));
-            facings.add(new Segment2(new Vector2(right - cornerMouth, bottom), new Vector2(right - dropDepth, bottom - cornerMouth)));
-            facings.add(new Segment2(new Vector2(cx - mouthHalf, top), new Vector2(cx - mouthHalf, top + dropDepth)));
-            facings.add(new Segment2(new Vector2(cx + mouthHalf, top), new Vector2(cx + mouthHalf, top + dropDepth)));
-            facings.add(new Segment2(new Vector2(cx - mouthHalf, bottom), new Vector2(cx - mouthHalf, bottom - dropDepth)));
-            facings.add(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(cx + mouthHalf, bottom - dropDepth)));
+            List<FacingSegment> facings = new ArrayList<>();
+            facings.add(new FacingSegment(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(right - cornerMouth, top), new Vector2(right - dropDepth, top + cornerMouth)), new Vector2(-1, 1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(left + cornerMouth, bottom), new Vector2(left + dropDepth, bottom - cornerMouth)), new Vector2(1, -1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(right - cornerMouth, bottom), new Vector2(right - dropDepth, bottom - cornerMouth)), new Vector2(-1, -1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(cx - mouthHalf, top), new Vector2(cx - mouthHalf, top + dropDepth)), new Vector2(0, 1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(cx + mouthHalf, top), new Vector2(cx + mouthHalf, top + dropDepth)), new Vector2(0, 1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(cx - mouthHalf, bottom), new Vector2(cx - mouthHalf, bottom - dropDepth)), new Vector2(0, -1)));
+            facings.add(new FacingSegment(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(cx + mouthHalf, bottom - dropDepth)), new Vector2(0, -1)));
 
             List<ShelfLine> shelves = new ArrayList<>();
             shelves.add(new ShelfLine(new Segment2(new Vector2(left + cornerMouth, top + dropDepth), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
@@ -896,12 +925,12 @@ public final class PhysicsWorld {
             jaws.add(new ArcJaw(new Vector2(cx + mouthHalf, bottom - jawR), jawR, 0, 90));
 
             List<PocketRegion> regions = new ArrayList<>();
-            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, top - cornerCenterOffset), cornerMouth));
-            regions.add(new PocketRegion(new Vector2(cx, top - sideCenterOffset), mouthHalf));
-            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, top - cornerCenterOffset), cornerMouth));
-            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth));
-            regions.add(new PocketRegion(new Vector2(cx, bottom + sideCenterOffset), mouthHalf));
-            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth));
+            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, top - cornerCenterOffset), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(cx, top - sideCenterOffset), mouthHalf, true));
+            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, top - cornerCenterOffset), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(cx, bottom + sideCenterOffset), mouthHalf, true));
+            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth, false));
 
             return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(facings), List.copyOf(shelves), List.copyOf(jaws), List.copyOf(regions));
         }
@@ -936,11 +965,21 @@ public final class PhysicsWorld {
                 if (openMouthRadius <= 0.0) {
                     continue;
                 }
-                if (p.sub(region.center).length() < openMouthRadius) {
+                if (p.sub(region.center).length() < openMouthRadius && isWithinMouthSpan(p, region)) {
                     return true;
                 }
             }
             return false;
+        }
+
+        private boolean isWithinMouthSpan(Vector2 p, PocketRegion region) {
+            if (region.sidePocket) {
+                return Math.abs(p.x() - cx) <= mouthHalf;
+            }
+            if (region.center.x() < cx) {
+                return p.x() <= left + cornerMouth;
+            }
+            return p.x() >= right - cornerMouth;
         }
 
         private boolean isPottedAt(Vector2 p, double ballRadius, Vector2 center, double pocketRadius) {
