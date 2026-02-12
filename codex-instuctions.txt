@@ -1,38 +1,12 @@
-POCKET ENTRY BUG: Balls pass the pocket mouth then bounce back onto the table.
-This indicates global rectangular bounds or two-sided rail/facing collisions are still active behind pocket openings.
+codex @'
+TEST: Are yellow pocket mouth colliders blocking side pockets?
 
-Acceptance (manual):
-- A slow ball aimed into bottom-middle pocket does NOT bounce back from an invisible boundary.
-- When entering a pocket mouth, the ball transitions into ENTERING_POCKET / IN_POCKET behavior (damping + capture), not table-wall reflection.
-- Rails and pocket facings are ONE-SIDED: they only collide from the table side, not from behind.
+1) Add PhysicsConfig flag: POCKET_MOUTH_COLLIDERS_ENABLED (default false).
+2) In PhysicsWorld pocket collision resolution, guard ALL jaw/facing collision impulses with that flag:
+   - if (!POCKET_MOUTH_COLLIDERS_ENABLED) skip collisions against jawArcs + facingSegments
+   - keep rails + shelf/capture logic unchanged
+3) Keep drawing yellow shapes in P overlay (visual only).
+4) Run .\mvnw.cmd test
 
-Do:
-1) Locate ANY global table boundary collision/clamp:
-   rg -n "minX|maxX|minY|maxY|bounds|clamp|contain|outOfBounds|tableBounds|AABB" src/main/java/com/billiardgame/physics/PhysicsWorld.java
-
-2) Remove/disable that rectangular boundary enforcement.
-   - The only table containment must come from rail segments (which already have gaps at pocket mouths).
-
-3) Make rail segments one-sided:
-   - Each rail segment has an inward normal.
-   - Only resolve collision if the ball is on/near the table side (signed distance indicates approaching from inside).
-   - If the ball is outside the bed region (past the rail plane), do NOT apply the rail impulse that pushes it back.
-
-4) Make pocket facings/jaws one-sided as well:
-   - Facings that represent cushion noses should only collide from bed side.
-   - Inner pocket liner surfaces (if any) should collide from pocket interior side with low restitution/high friction.
-
-5) Add a simple pocket entry classification used during collision resolution:
-   - If ball center is within a pocket mouth opening region (near a pocket center and between the cut rail endpoints),
-     then ignore rail/facing collisions that would block entry.
-   - Once the center crosses the shelf line gate, switch to IN_POCKET and disable all bed-side rails entirely for that ball.
-
-6) Keep captureCandidate(...) rule, but ensure it can now be reached without being reflected back.
-
-7) Run: .\mvnw.cmd test
-
-Output:
-- Changed files
-- What global bound logic was removed/changed
-- The exact one-sided collision condition used for rails/facings
+Goal: With flag=false, balls should enter side pockets if yellow colliders were the blocker.
 '@

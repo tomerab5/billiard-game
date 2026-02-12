@@ -23,6 +23,11 @@ public final class PhysicsWorld {
     private final double pixelsPerMeter;
     private double muRolling;
     private final PocketModel pocketModel;
+    private final int railSegmentCount;
+    private final int railTopSegmentCount;
+    private final int railBottomSegmentCount;
+    private final int railLeftSegmentCount;
+    private final int railRightSegmentCount;
 
     public static final class DebugSegment {
         private final Vector2 a;
@@ -99,6 +104,11 @@ public final class PhysicsWorld {
         );
         this.muRolling = PhysicsConfig.DEFAULT_MU_ROLLING;
         this.pocketModel = PocketModel.fromBounds(this.bounds, PhysicsConfig.BALL_RADIUS_M);
+        this.railSegmentCount = pocketModel.railSegmentCount();
+        this.railTopSegmentCount = pocketModel.railSegmentCountBySide(RailSide.TOP);
+        this.railBottomSegmentCount = pocketModel.railSegmentCountBySide(RailSide.BOTTOM);
+        this.railLeftSegmentCount = pocketModel.railSegmentCountBySide(RailSide.LEFT);
+        this.railRightSegmentCount = pocketModel.railSegmentCountBySide(RailSide.RIGHT);
     }
 
     public List<Ball> balls() {
@@ -234,10 +244,30 @@ public final class PhysicsWorld {
 
     public List<DebugSegment> pocketMouthSegmentsPx() {
         List<DebugSegment> out = new ArrayList<>();
-        for (Segment2 s : pocketModel.mouthSegments) {
-            out.add(new DebugSegment(toPixels(s.a), toPixels(s.b)));
+        for (RailSegment s : pocketModel.railColliders) {
+            out.add(new DebugSegment(toPixels(s.segment.a), toPixels(s.segment.b)));
         }
         return List.copyOf(out);
+    }
+
+    public int railSegmentCount() {
+        return railSegmentCount;
+    }
+
+    public int railTopSegmentCount() {
+        return railTopSegmentCount;
+    }
+
+    public int railBottomSegmentCount() {
+        return railBottomSegmentCount;
+    }
+
+    public int railLeftSegmentCount() {
+        return railLeftSegmentCount;
+    }
+
+    public int railRightSegmentCount() {
+        return railRightSegmentCount;
     }
 
     public List<DebugArc> pocketJawArcsPx() {
@@ -341,48 +371,23 @@ public final class PhysicsWorld {
         if (pocketModel.isInPocketMouthOpenRegion(ballBody.position, ballBody.radius)) {
             return;
         }
-        double r = ballBody.radius;
-        double x = ballBody.position.x();
-        double y = ballBody.position.y();
-
-        if (x + r > bounds.right()) {
-            if (!pocketModel.inRightOpening(y)) {
-                if (ballBody.velocity.x() > 0.0) {
-                    x = bounds.right() - r;
-                    ballBody.position = new Vector2(x, y);
-                    applyRailContactImpulse(ballBody, new Vector2(-1, 0));
-                }
+        RailSegment bestRail = null;
+        double bestPenetration = 0.0;
+        for (RailSegment rail : pocketModel.railColliders) {
+            CollisionContact c = segmentCollision(ballBody.position, ballBody.radius, rail.segment);
+            if (c == null) {
+                continue;
+            }
+            if (c.penetration > bestPenetration) {
+                bestPenetration = c.penetration;
+                bestRail = rail;
             }
         }
-        if (x - r < bounds.left()) {
-            if (!pocketModel.inLeftOpening(y)) {
-                if (ballBody.velocity.x() < 0.0) {
-                    x = bounds.left() + r;
-                    ballBody.position = new Vector2(x, y);
-                    applyRailContactImpulse(ballBody, new Vector2(1, 0));
-                }
-            }
+        if (bestRail != null) {
+            Vector2 n = bestRail.inTableNormal;
+            ballBody.position = ballBody.position.add(n.mul(bestPenetration + 1e-6));
+            applyRailContactImpulse(ballBody, n);
         }
-        if (y + r > bounds.bottom()) {
-            if (!pocketModel.inBottomOpening(x)) {
-                if (ballBody.velocity.y() > 0.0) {
-                    y = bounds.bottom() - r;
-                    ballBody.position = new Vector2(x, y);
-                    applyRailContactImpulse(ballBody, new Vector2(0, -1));
-                }
-            }
-        }
-        if (y - r < bounds.top()) {
-            if (!pocketModel.inTopOpening(x)) {
-                if (ballBody.velocity.y() < 0.0) {
-                    y = bounds.top() + r;
-                    ballBody.position = new Vector2(x, y);
-                    applyRailContactImpulse(ballBody, new Vector2(0, 1));
-                }
-            }
-        }
-
-        ballBody.position = new Vector2(x, y);
     }
 
     private void applyRailContactImpulse(BallBody body, Vector2 normal) {
@@ -516,6 +521,9 @@ public final class PhysicsWorld {
     }
 
     private void resolvePocketSurfaceCollision(BallBody body) {
+        if (!PhysicsConfig.POCKET_MOUTH_COLLIDERS_ENABLED) {
+            return;
+        }
         if (pocketModel.isInPocketMouthOpenRegion(body.position, body.radius)) {
             return;
         }
@@ -798,6 +806,30 @@ public final class PhysicsWorld {
         }
     }
 
+    private enum RailSide {
+        TOP,
+        BOTTOM,
+        LEFT,
+        RIGHT
+    }
+
+    private static final class RailSegment {
+        private final Segment2 segment;
+        private final RailSide side;
+        private final Vector2 inTableNormal;
+
+        private RailSegment(Segment2 segment, RailSide side) {
+            this.segment = segment;
+            this.side = side;
+            this.inTableNormal = switch (side) {
+                case TOP -> new Vector2(0, 1);
+                case BOTTOM -> new Vector2(0, -1);
+                case LEFT -> new Vector2(1, 0);
+                case RIGHT -> new Vector2(-1, 0);
+            };
+        }
+    }
+
     private static final class PocketCapture {
         private final Vector2 center;
 
@@ -847,13 +879,13 @@ public final class PhysicsWorld {
         private final double mouthHalf;
         private final double cornerMouth;
         private final double dropDepth;
-        private final List<Segment2> mouthSegments;
+        private final List<RailSegment> railColliders;
         private final List<FacingSegment> facingSegments;
         private final List<ShelfLine> shelfLines;
         private final List<ArcJaw> jawArcs;
         private final List<PocketRegion> pocketRegions;
 
-        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<Segment2> mouthSegments, List<FacingSegment> facingSegments, List<ShelfLine> shelfLines, List<ArcJaw> jawArcs, List<PocketRegion> pocketRegions) {
+        private PocketModel(double left, double right, double top, double bottom, double cx, double mouthHalf, double cornerMouth, double dropDepth, List<RailSegment> railColliders, List<FacingSegment> facingSegments, List<ShelfLine> shelfLines, List<ArcJaw> jawArcs, List<PocketRegion> pocketRegions) {
             this.left = left;
             this.right = right;
             this.top = top;
@@ -862,7 +894,7 @@ public final class PhysicsWorld {
             this.mouthHalf = mouthHalf;
             this.cornerMouth = cornerMouth;
             this.dropDepth = dropDepth;
-            this.mouthSegments = mouthSegments;
+            this.railColliders = railColliders;
             this.facingSegments = facingSegments;
             this.shelfLines = shelfLines;
             this.jawArcs = jawArcs;
@@ -884,13 +916,16 @@ public final class PhysicsWorld {
             double cornerCenterOffset = cornerMouth;
             double sideCenterOffset = mouthHalf;
 
-            List<Segment2> segs = new ArrayList<>();
-            segs.add(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(cx - mouthHalf, top)));
-            segs.add(new Segment2(new Vector2(cx + mouthHalf, top), new Vector2(right - cornerMouth, top)));
-            segs.add(new Segment2(new Vector2(left + cornerMouth, bottom), new Vector2(cx - mouthHalf, bottom)));
-            segs.add(new Segment2(new Vector2(cx + mouthHalf, bottom), new Vector2(right - cornerMouth, bottom)));
-            segs.add(new Segment2(new Vector2(left, top + cornerMouth), new Vector2(left, bottom - cornerMouth)));
-            segs.add(new Segment2(new Vector2(right, top + cornerMouth), new Vector2(right, bottom - cornerMouth)));
+            List<RailSegment> segs = new ArrayList<>();
+            addRailSegment(segs, new Vector2(left + cornerMouth, top), new Vector2(cx - mouthHalf, top), RailSide.TOP);
+            addRailSegment(segs, new Vector2(cx + mouthHalf, top), new Vector2(right - cornerMouth, top), RailSide.TOP);
+            addRailSegment(segs, new Vector2(left + cornerMouth, bottom), new Vector2(cx - mouthHalf, bottom), RailSide.BOTTOM);
+            addRailSegment(segs, new Vector2(cx + mouthHalf, bottom), new Vector2(right - cornerMouth, bottom), RailSide.BOTTOM);
+            addRailSegment(segs, new Vector2(left, top + cornerMouth), new Vector2(left, bottom - cornerMouth), RailSide.LEFT);
+            addRailSegment(segs, new Vector2(right, top + cornerMouth), new Vector2(right, bottom - cornerMouth), RailSide.RIGHT);
+            if (segs.isEmpty()) {
+                throw new IllegalStateException("No rail segments constructed.");
+            }
 
             List<FacingSegment> facings = new ArrayList<>();
             facings.add(new FacingSegment(new Segment2(new Vector2(left + cornerMouth, top), new Vector2(left + dropDepth, top + cornerMouth)), new Vector2(1, 1)));
@@ -935,20 +970,25 @@ public final class PhysicsWorld {
             return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(facings), List.copyOf(shelves), List.copyOf(jaws), List.copyOf(regions));
         }
 
-        private boolean inTopOpening(double x) {
-            return x <= left + cornerMouth || x >= right - cornerMouth || Math.abs(x - cx) <= mouthHalf;
+        private static void addRailSegment(List<RailSegment> out, Vector2 a, Vector2 b, RailSide side) {
+            if (b.sub(a).lengthSq() <= 1e-12) {
+                return;
+            }
+            out.add(new RailSegment(new Segment2(a, b), side));
         }
 
-        private boolean inBottomOpening(double x) {
-            return inTopOpening(x);
+        private int railSegmentCount() {
+            return railColliders.size();
         }
 
-        private boolean inLeftOpening(double y) {
-            return y <= top + cornerMouth || y >= bottom - cornerMouth;
-        }
-
-        private boolean inRightOpening(double y) {
-            return inLeftOpening(y);
+        private int railSegmentCountBySide(RailSide side) {
+            int count = 0;
+            for (RailSegment rail : railColliders) {
+                if (rail.side == side) {
+                    count++;
+                }
+            }
+            return count;
         }
 
         private double captureApproachDamping(Vector2 p, double ballRadius, double dtSeconds) {

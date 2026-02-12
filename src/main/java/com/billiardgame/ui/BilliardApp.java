@@ -342,8 +342,12 @@ public final class BilliardApp extends Application {
         }
         gc.setStroke(Color.color(0.40, 0.95, 1.0, 0.75));
         gc.setLineWidth(1.6);
+        gc.setFill(Color.color(0.78, 0.98, 1.0, 0.90));
         for (PhysicsWorld.DebugSegment s : world.pocketMouthSegmentsPx()) {
             gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+            double dotR = 2.2;
+            gc.fillOval(s.a().x() - dotR, s.a().y() - dotR, dotR * 2, dotR * 2);
+            gc.fillOval(s.b().x() - dotR, s.b().y() - dotR, dotR * 2, dotR * 2);
         }
         gc.setStroke(Color.color(1.0, 0.92, 0.36, 0.78));
         gc.setLineWidth(1.5);
@@ -368,6 +372,20 @@ public final class BilliardApp extends Application {
                     javafx.scene.shape.ArcType.OPEN
             );
         }
+        gc.setFill(Color.color(0.90, 0.98, 1.0, 0.92));
+        gc.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
+        gc.fillText(
+                String.format(
+                        "RAILS all=%d top=%d bottom=%d left=%d right=%d",
+                        world.railSegmentCount(),
+                        world.railTopSegmentCount(),
+                        world.railBottomSegmentCount(),
+                        world.railLeftSegmentCount(),
+                        world.railRightSegmentCount()
+                ),
+                20,
+                228
+        );
     }
 
     private void drawRoomBackground(GraphicsContext gc, double t) {
