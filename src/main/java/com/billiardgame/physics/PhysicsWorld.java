@@ -23,6 +23,8 @@ public final class PhysicsWorld {
     private final double pixelsPerMeter;
     private double muRolling;
     private final PocketModel pocketModel;
+    private boolean scratchPending;
+    private boolean cueBallRespawnedThisStep;
 
     public static final class DebugSegment {
         private final Vector2 a;
@@ -99,6 +101,8 @@ public final class PhysicsWorld {
         );
         this.muRolling = PhysicsConfig.DEFAULT_MU_ROLLING;
         this.pocketModel = PocketModel.fromBounds(this.bounds, PhysicsConfig.BALL_RADIUS_M);
+        this.scratchPending = false;
+        this.cueBallRespawnedThisStep = false;
     }
 
     public List<Ball> balls() {
@@ -124,6 +128,9 @@ public final class PhysicsWorld {
         if (balls.isEmpty()) {
             throw new IllegalStateException("No balls in world");
         }
+        if (!isCueBallOnTable()) {
+            return;
+        }
         balls.get(0).velocity = toMeters(velocity);
     }
 
@@ -133,6 +140,24 @@ public final class PhysicsWorld {
 
     public Vector2 ballVelocity(int index) {
         return toPixels(balls.get(index).velocity);
+    }
+
+    public static final class DebugCircle {
+        private final Vector2 center;
+        private final double radius;
+
+        public DebugCircle(Vector2 center, double radius) {
+            this.center = center;
+            this.radius = radius;
+        }
+
+        public Vector2 center() {
+            return center;
+        }
+
+        public double radius() {
+            return radius;
+        }
     }
 
     public double ballSlipSpeed(int index) {
@@ -155,6 +180,9 @@ public final class PhysicsWorld {
         if (balls.isEmpty()) {
             throw new IllegalStateException("No balls in world");
         }
+        if (!isCueBallOnTable()) {
+            return MotionMode.ROLLING;
+        }
         return balls.get(0).mode;
     }
 
@@ -162,12 +190,18 @@ public final class PhysicsWorld {
         if (balls.isEmpty()) {
             throw new IllegalStateException("No balls in world");
         }
+        if (!isCueBallOnTable()) {
+            return 0.0;
+        }
         return toPixels(balls.get(0).velocity).length();
     }
 
     public void strikeCueBall(Vector2 directionPx, double speedPxPerSec, Vector2 tipOffsetNorm) {
         if (balls.isEmpty()) {
             throw new IllegalStateException("No balls in world");
+        }
+        if (!isCueBallOnTable()) {
+            return;
         }
         if (directionPx.length() <= 1e-9 || speedPxPerSec <= 0.0) {
             return;
@@ -232,6 +266,19 @@ public final class PhysicsWorld {
         return balls.size();
     }
 
+    public boolean isCueBallOnTable() {
+        if (balls.isEmpty()) {
+            return false;
+        }
+        return balls.get(0).pocketState == BallPocketState.ON_TABLE;
+    }
+
+    public boolean consumeCueBallRespawnedThisStep() {
+        boolean out = cueBallRespawnedThisStep;
+        cueBallRespawnedThisStep = false;
+        return out;
+    }
+
     public List<DebugSegment> pocketMouthSegmentsPx() {
         List<DebugSegment> out = new ArrayList<>();
         for (Segment2 s : pocketModel.mouthSegments) {
@@ -244,6 +291,14 @@ public final class PhysicsWorld {
         List<DebugArc> out = new ArrayList<>();
         for (ArcJaw a : pocketModel.jawArcs) {
             out.add(new DebugArc(toPixels(a.center), toPixels(a.radius), a.startDeg, a.sweepDeg));
+        }
+        return List.copyOf(out);
+    }
+
+    public List<DebugCircle> pocketMouthGuidesPx() {
+        List<DebugCircle> out = new ArrayList<>();
+        for (PocketRegion region : pocketModel.pocketRegions) {
+            out.add(new DebugCircle(toPixels(region.mouthCenter), toPixels(region.radius)));
         }
         return List.copyOf(out);
     }
@@ -274,6 +329,9 @@ public final class PhysicsWorld {
 
     public double ballRenderScale(int index) {
         BallBody body = balls.get(index);
+        if (body.pocketState == BallPocketState.REMOVED) {
+            return 0.0;
+        }
         if (body.pocketState == BallPocketState.ON_TABLE) {
             return 1.0;
         }
@@ -282,6 +340,9 @@ public final class PhysicsWorld {
 
     public double ballRenderAlpha(int index) {
         BallBody body = balls.get(index);
+        if (body.pocketState == BallPocketState.REMOVED) {
+            return 0.0;
+        }
         if (body.pocketState == BallPocketState.ON_TABLE) {
             return 1.0;
         }
@@ -292,6 +353,7 @@ public final class PhysicsWorld {
         if (dtSeconds <= 0) {
             throw new IllegalArgumentException("dtSeconds must be positive");
         }
+        cueBallRespawnedThisStep = false;
 
         for (BallBody ballBody : balls) {
             if (ballBody.pocketState != BallPocketState.ON_TABLE) {
@@ -331,10 +393,23 @@ public final class PhysicsWorld {
                 ballBody.velocity = ballBody.velocity.mul(0.35);
                 ballBody.angularVelocity = ballBody.angularVelocity.mul(0.60);
                 ballBody.pocketTimer = 0.0;
+                if (ballBody == balls.get(0) && balls.size() > 1) {
+                    scratchPending = true;
+                }
             }
         }
 
-        balls.removeIf(body -> body.pocketState == BallPocketState.REMOVED);
+        for (int i = balls.size() - 1; i >= 0; i--) {
+            if (balls.get(i).pocketState == BallPocketState.REMOVED) {
+                if (i == 0 && scratchPending) {
+                    continue;
+                }
+                balls.remove(i);
+            }
+        }
+        if (scratchPending && !balls.isEmpty() && allBallsNearlyStopped()) {
+            respawnCueBall();
+        }
     }
 
     private void resolveRailCollision(BallBody ballBody) {
@@ -704,6 +779,76 @@ public final class PhysicsWorld {
         return new Ball(toPixels(body.position), toPixels(body.radius));
     }
 
+    private void respawnCueBall() {
+        if (balls.isEmpty()) {
+            scratchPending = false;
+            return;
+        }
+        BallBody cue = balls.get(0);
+        Vector2 spawn = findCueBallRespawnPosition(cue.radius);
+        cue.position = spawn;
+        cue.velocity = Vector2.ZERO;
+        cue.angularVelocity = Vector3.ZERO;
+        cue.orientation = Quaternion.IDENTITY;
+        cue.mode = MotionMode.SLIDING;
+        cue.pocketState = BallPocketState.ON_TABLE;
+        cue.pocketCenter = null;
+        cue.pocketZ = 0.0;
+        cue.pocketTimer = 0.0;
+        scratchPending = false;
+        cueBallRespawnedThisStep = true;
+    }
+
+    private Vector2 findCueBallRespawnPosition(double radius) {
+        double left = bounds.left() + radius;
+        double right = bounds.right() - radius;
+        double top = bounds.top() + radius;
+        double bottom = bounds.bottom() - radius;
+        double centerY = (top + bottom) * 0.5;
+        Vector2[] candidates = new Vector2[]{
+                new Vector2((bounds.left() + bounds.right()) * 0.5, centerY),
+                new Vector2(bounds.left() + ((bounds.right() - bounds.left()) * 0.25), centerY),
+                new Vector2(bounds.left() + ((bounds.right() - bounds.left()) * 0.20), centerY)
+        };
+        for (Vector2 candidate : candidates) {
+            Vector2 clamped = new Vector2(
+                    Math.max(left, Math.min(right, candidate.x())),
+                    Math.max(top, Math.min(bottom, candidate.y()))
+            );
+            if (isCueSpawnClear(clamped, radius)) {
+                return clamped;
+            }
+        }
+        int scanX = 18;
+        int scanY = 10;
+        for (int iy = 0; iy < scanY; iy++) {
+            double y = top + ((bottom - top) * ((iy + 0.5) / scanY));
+            for (int ix = 0; ix < scanX; ix++) {
+                double x = left + ((right - left) * ((ix + 0.5) / scanX));
+                Vector2 probe = new Vector2(x, y);
+                if (isCueSpawnClear(probe, radius)) {
+                    return probe;
+                }
+            }
+        }
+        return new Vector2(Math.max(left, Math.min(right, (bounds.left() + bounds.right()) * 0.5)), centerY);
+    }
+
+    private boolean isCueSpawnClear(Vector2 position, double radius) {
+        double minGap = radius * 2.05;
+        double minGapSq = minGap * minGap;
+        for (int i = 1; i < balls.size(); i++) {
+            BallBody other = balls.get(i);
+            if (other.pocketState != BallPocketState.ON_TABLE) {
+                continue;
+            }
+            if (other.position.sub(position).lengthSq() < minGapSq) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private Vector2 toMeters(Vector2 valuePx) {
         return valuePx.mul(1.0 / pixelsPerMeter);
     }
@@ -808,11 +953,13 @@ public final class PhysicsWorld {
 
     private static final class PocketRegion {
         private final Vector2 center;
+        private final Vector2 mouthCenter;
         private final double radius;
         private final boolean sidePocket;
 
-        private PocketRegion(Vector2 center, double radius, boolean sidePocket) {
+        private PocketRegion(Vector2 center, Vector2 mouthCenter, double radius, boolean sidePocket) {
             this.center = center;
+            this.mouthCenter = mouthCenter;
             this.radius = radius;
             this.sidePocket = sidePocket;
         }
@@ -925,12 +1072,12 @@ public final class PhysicsWorld {
             jaws.add(new ArcJaw(new Vector2(cx + mouthHalf, bottom - jawR), jawR, 0, 90));
 
             List<PocketRegion> regions = new ArrayList<>();
-            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, top - cornerCenterOffset), cornerMouth, false));
-            regions.add(new PocketRegion(new Vector2(cx, top - sideCenterOffset), mouthHalf, true));
-            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, top - cornerCenterOffset), cornerMouth, false));
-            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth, false));
-            regions.add(new PocketRegion(new Vector2(cx, bottom + sideCenterOffset), mouthHalf, true));
-            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, top - cornerCenterOffset), new Vector2(left, top), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(cx, top - sideCenterOffset), new Vector2(cx, top), mouthHalf, true));
+            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, top - cornerCenterOffset), new Vector2(right, top), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(left - cornerCenterOffset, bottom + cornerCenterOffset), new Vector2(left, bottom), cornerMouth, false));
+            regions.add(new PocketRegion(new Vector2(cx, bottom + sideCenterOffset), new Vector2(cx, bottom), mouthHalf, true));
+            regions.add(new PocketRegion(new Vector2(right + cornerCenterOffset, bottom + cornerCenterOffset), new Vector2(right, bottom), cornerMouth, false));
 
             return new PocketModel(left, right, top, bottom, cx, mouthHalf, cornerMouth, dropDepth, List.copyOf(segs), List.copyOf(facings), List.copyOf(shelves), List.copyOf(jaws), List.copyOf(regions));
         }
@@ -961,15 +1108,22 @@ public final class PhysicsWorld {
 
         private boolean isInPocketMouthOpenRegion(Vector2 p, double ballRadius) {
             for (PocketRegion region : pocketRegions) {
-                double openMouthRadius = region.radius - (ballRadius * 0.25);
-                if (openMouthRadius <= 0.0) {
-                    continue;
-                }
-                if (p.sub(region.center).length() < openMouthRadius && isWithinMouthSpan(p, region)) {
+                if (isInsideMouthOpenRegion(p, ballRadius, region)) {
                     return true;
                 }
             }
             return false;
+        }
+
+        private boolean isInsideMouthOpenRegion(Vector2 p, double ballRadius, PocketRegion region) {
+            double openMouthRadius = region.radius - (ballRadius * 0.25);
+            if (openMouthRadius <= 0.0) {
+                return false;
+            }
+            if (p.sub(region.mouthCenter).length() >= openMouthRadius) {
+                return false;
+            }
+            return isWithinMouthSpan(p, region);
         }
 
         private boolean isWithinMouthSpan(Vector2 p, PocketRegion region) {

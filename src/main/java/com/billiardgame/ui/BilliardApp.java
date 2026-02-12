@@ -132,7 +132,7 @@ public final class BilliardApp extends Application {
         canvas.setOnMouseMoved(event -> mousePosition = new Vector2(event.getX(), event.getY()));
         canvas.setOnMousePressed(event -> {
             mousePosition = new Vector2(event.getX(), event.getY());
-            if (event.getButton() == MouseButton.PRIMARY && world.allBallsNearlyStopped() && !cueForwardAnimating) {
+            if (event.getButton() == MouseButton.PRIMARY && world.allBallsNearlyStopped() && world.isCueBallOnTable() && !cueForwardAnimating) {
                 chargingShot = true;
                 shotChargeStartNanos = System.nanoTime();
                 lastChargeSeconds = 0.0;
@@ -150,12 +150,12 @@ public final class BilliardApp extends Application {
         });
         canvas.setOnMouseDragged(event -> {
             mousePosition = new Vector2(event.getX(), event.getY());
-            if (rightDragTip) {
+            if (rightDragTip && world.isCueBallOnTable()) {
                 adjustTipOffset(event.getX() - cueBallScreenX(), event.getY() - cueBallScreenY());
             }
         });
         canvas.setOnScroll(event -> {
-            if (!world.allBallsNearlyStopped()) {
+            if (!world.allBallsNearlyStopped() || !world.isCueBallOnTable()) {
                 return;
             }
             double delta = event.getDeltaY() > 0 ? 0.04 : -0.04;
@@ -250,6 +250,15 @@ public final class BilliardApp extends Application {
 
     private void update(double dtSeconds) {
         world.step(dtSeconds);
+        if (!world.isCueBallOnTable()) {
+            chargingShot = false;
+            cueForwardAnimating = false;
+            cueForwardBackOffsetPx = 0.0;
+            pendingShotDirection = Vector2.ZERO;
+            pendingShotSpeedPxPerSec = 0.0;
+            pendingShotTipOffset = Vector2.ZERO;
+            lastChargeSeconds = 0.0;
+        }
         if (chargingShot) {
             long elapsedNanos = Math.max(0L, System.nanoTime() - shotChargeStartNanos);
             lastChargeSeconds = elapsedNanos / 1_000_000_000.0;
@@ -265,7 +274,18 @@ public final class BilliardApp extends Application {
                 lastChargeSeconds = 0.0;
             }
         }
-        simulatorState = world.cueBallSpeed() > 0 ? SimulatorState.MOVING : SimulatorState.AIMING;
+        if (world.consumeCueBallRespawnedThisStep()) {
+            simulatorState = SimulatorState.AIMING;
+            chargingShot = false;
+            cueForwardAnimating = false;
+            cueForwardBackOffsetPx = 0.0;
+            pendingShotDirection = Vector2.ZERO;
+            pendingShotSpeedPxPerSec = 0.0;
+            pendingShotTipOffset = Vector2.ZERO;
+            lastChargeSeconds = 0.0;
+        } else {
+            simulatorState = (!world.allBallsNearlyStopped() || !world.isCueBallOnTable()) ? SimulatorState.MOVING : SimulatorState.AIMING;
+        }
     }
 
     private PhysicsWorld createInitialWorld() {
@@ -287,7 +307,7 @@ public final class BilliardApp extends Application {
     }
 
     private void releaseShot() {
-        if (!chargingShot || cueForwardAnimating) {
+        if (!chargingShot || cueForwardAnimating || !world.allBallsNearlyStopped() || !world.isCueBallOnTable()) {
             return;
         }
         chargingShot = false;
@@ -354,6 +374,11 @@ public final class BilliardApp extends Application {
         gc.setLineWidth(1.6);
         for (PhysicsWorld.DebugSegment s : world.pocketShelfSegmentsPx()) {
             gc.strokeLine(s.a().x(), s.a().y(), s.b().x(), s.b().y());
+        }
+        gc.setStroke(Color.color(0.56, 1.0, 0.62, 0.68));
+        gc.setLineWidth(1.2);
+        for (PhysicsWorld.DebugCircle c : world.pocketMouthGuidesPx()) {
+            gc.strokeOval(c.center().x() - c.radius(), c.center().y() - c.radius(), c.radius() * 2, c.radius() * 2);
         }
         gc.setStroke(Color.color(1.0, 0.65, 0.35, 0.70));
         gc.setLineWidth(1.4);
@@ -616,7 +641,7 @@ public final class BilliardApp extends Application {
     }
 
     private void drawAimGuide(GraphicsContext gc) {
-        if (!world.allBallsNearlyStopped()) {
+        if (!world.allBallsNearlyStopped() || !world.isCueBallOnTable()) {
             return;
         }
 
@@ -796,7 +821,7 @@ public final class BilliardApp extends Application {
     }
 
     private void drawTipMarker(GraphicsContext gc, Ball cueBall) {
-        if (!world.allBallsNearlyStopped()) {
+        if (!world.allBallsNearlyStopped() || !world.isCueBallOnTable()) {
             return;
         }
         double markerX = cueBall.position().x() + tipOffsetNorm.x() * cueBall.radius();
@@ -1208,12 +1233,14 @@ public final class BilliardApp extends Application {
             Ball cueBall = world.cueBall();
             double pulse = 0.5 + 0.5 * Math.sin(t * 8.0);
             double radius = cueBall.radius() * (3.8 + pulse * 1.2);
-            gc.setFill(new RadialGradient(
-                    0, 0, cueBall.position().x(), cueBall.position().y(), radius, false, CycleMethod.NO_CYCLE,
-                    new Stop(0.0, Color.color(1.0, 0.86, 0.44, 0.24)),
-                    new Stop(1.0, Color.TRANSPARENT)
-            ));
-            gc.fillOval(cueBall.position().x() - radius, cueBall.position().y() - radius, radius * 2, radius * 2);
+            if (world.isCueBallOnTable()) {
+                gc.setFill(new RadialGradient(
+                        0, 0, cueBall.position().x(), cueBall.position().y(), radius, false, CycleMethod.NO_CYCLE,
+                        new Stop(0.0, Color.color(1.0, 0.86, 0.44, 0.24)),
+                        new Stop(1.0, Color.TRANSPARENT)
+                ));
+                gc.fillOval(cueBall.position().x() - radius, cueBall.position().y() - radius, radius * 2, radius * 2);
+            }
         }
 
         gc.restore();
@@ -1287,6 +1314,9 @@ public final class BilliardApp extends Application {
     }
 
     private void adjustTipOffset(double dxPx, double dyPx) {
+        if (!world.isCueBallOnTable()) {
+            return;
+        }
         Ball cueBall = world.cueBall();
         if (cueBall.radius() <= 1e-6) {
             return;
